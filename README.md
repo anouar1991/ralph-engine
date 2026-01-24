@@ -35,6 +35,8 @@ Autonomous task executor for Claude Code. Ralph reads a PRD (Product Requirement
 - **Auto-generate PRD**: Create tasks from a simple goal description
 - **Git as memory**: Each task completion is committed, creating a clear history
 - **Self-verifying**: After each task, a verification step ensures proper completion
+- **Auto-expansion**: Complex tasks automatically break down into sub-PRDs
+- **Live dashboard**: Real-time visualization of task progress
 - **Resilient**: Timeouts, stuck detection, and auto-recovery keep things moving
 
 ## Installation
@@ -128,6 +130,9 @@ ralph --dry-run         # Preview only
 | `-o, --output` | Log directory | /tmp/ralph |
 | `-q, --quiet` | Minimal output | false |
 | `--no-verify` | Skip verification | false |
+| `--no-expand` | Disable auto task expansion | false |
+| `--expansion-threshold` | Complexity threshold for expansion | 4 |
+| `--max-stack-depth` | Maximum nested sub-PRD depth | 3 |
 | `--dry-run` | Preview only | false |
 
 ### `ralph status` - Show Progress
@@ -145,6 +150,47 @@ Shows:
 - Completed vs pending tasks
 - Next available task (based on dependencies)
 
+### `ralph stack` - Show Expansion Stack
+
+Display the PRD expansion stack status when working with sub-PRDs.
+
+```bash
+ralph stack              # Current directory
+ralph stack ~/my-project # Specific project
+```
+
+Shows:
+- Current stack depth
+- Active PRD file (main or sub-PRD)
+- Parent tasks that have been expanded
+- When each expansion was started
+- Sub-PRD files in the project
+
+### `ralph watch` - Live Dashboard
+
+Real-time task visualization dashboard.
+
+```bash
+ralph watch              # Watch current project
+ralph watch -r 5         # Refresh every 5 seconds
+ralph watch & ralph      # Run dashboard alongside ralph
+```
+
+**Options:**
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-r, --refresh` | Refresh interval (seconds) | 2 |
+| `-p, --prd` | PRD filename | prd.json |
+
+**Task Status Icons:**
+| Icon | Status | Description |
+|------|--------|-------------|
+| ✓ | Done | Task completed successfully |
+| ◉ | Working | Task currently in progress |
+| ○ | Ready | Task ready to start (dependencies met) |
+| ◌ | Blocked | Waiting on dependencies |
+| ↳ | Expanding | Task expanded into sub-PRD |
+
 ## Environment Variables
 
 | Variable | Description |
@@ -152,6 +198,9 @@ Shows:
 | `RALPH_MAX_ITERATIONS` | Override default max iterations |
 | `RALPH_TIMEOUT` | Override default timeout |
 | `RALPH_OUTPUT_DIR` | Override default output directory |
+| `RALPH_NO_EXPAND` | Disable automatic expansion (true/false) |
+| `RALPH_EXPANSION_THRESHOLD` | Complexity threshold for expansion |
+| `RALPH_MAX_STACK_DEPTH` | Maximum nested sub-PRD depth |
 | `NO_COLOR` | Disable colored output |
 
 ## PRD File Format
@@ -218,6 +267,34 @@ Ralph expects a `prd.json` file with a `tasks` array:
 - **T-500s**: Polish (error handling, edge cases)
 - **T-600s**: Testing and documentation
 
+### Expandable Tasks
+
+Mark complex tasks for automatic expansion into sub-PRDs:
+
+```json
+{
+  "id": "T-200",
+  "name": "Implement authentication system",
+  "complexity": 5,
+  "expand": true,
+  "expandGoal": "Build JWT auth with login, tokens, and password reset",
+  "guarantees": [
+    "Users can log in",
+    "JWT tokens are generated",
+    "Password reset works"
+  ]
+}
+```
+
+**Expansion Fields:**
+| Field | Description |
+|-------|-------------|
+| `expand` | Set to `true` to force expansion |
+| `expandGoal` | Goal description for the sub-PRD |
+| `complexity` | Tasks with complexity ≥ 4 and ≥ 5 actions auto-expand |
+
+When expanded, Ralph creates `prd-T-200.json` with sub-tasks like `T-200-100`, `T-200-200`, etc.
+
 ## How Ralph Works
 
 ### 1. Task Selection
@@ -248,7 +325,20 @@ A second Claude call verifies:
 - `prd.json` updated with `pass: true`
 - Any missed steps are fixed
 
-### 5. Loop or Exit
+### 5. Expansion (if needed)
+For complex tasks (marked with `expand: true` or high complexity):
+- Ralph generates a sub-PRD (e.g., `prd-T-200.json`)
+- Pushes current state onto the stack
+- Works on sub-PRD until all sub-tasks complete
+- Pops stack and marks parent task complete
+
+```
+Main PRD → detect complex task → push stack → generate sub-PRD → iterate
+    ↑                                                              ↓
+    └──────── pop stack ← mark parent done ← sub-PRD complete ←───┘
+```
+
+### 6. Loop or Exit
 - If tasks remain: continue to next iteration
 - If all complete: show success and exit
 

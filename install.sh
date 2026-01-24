@@ -22,7 +22,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${RALPH_INSTALL_DIR:-$HOME/.local}"
 BIN_DIR="$INSTALL_DIR/bin"
 LIB_DIR="$INSTALL_DIR/lib/ralph"
-COMPLETIONS_DIR="${BASH_COMPLETION_USER_DIR:-$HOME/.local/share/bash-completion/completions}"
+MAN_DIR="$INSTALL_DIR/share/man/man1"
+BASH_COMPLETIONS_DIR="${BASH_COMPLETION_USER_DIR:-$HOME/.local/share/bash-completion/completions}"
+ZSH_COMPLETIONS_DIR="$HOME/.local/share/zsh/site-functions"
 
 usage() {
     cat <<EOF
@@ -80,12 +82,13 @@ install_ralph() {
     echo ""
 
     # Create directories
-    mkdir -p "$BIN_DIR" "$LIB_DIR" "$COMPLETIONS_DIR"
+    mkdir -p "$BIN_DIR" "$LIB_DIR" "$MAN_DIR" "$BASH_COMPLETIONS_DIR" "$ZSH_COMPLETIONS_DIR"
 
-    # Copy files
-    info "Installing library..."
+    # Copy library files
+    info "Installing libraries..."
     cp "$SCRIPT_DIR/lib/ralph-core.sh" "$LIB_DIR/"
-    chmod 644 "$LIB_DIR/ralph-core.sh"
+    cp "$SCRIPT_DIR/lib/ralph-watch.sh" "$LIB_DIR/"
+    chmod 644 "$LIB_DIR/ralph-core.sh" "$LIB_DIR/ralph-watch.sh"
 
     info "Installing binary..."
     cp "$SCRIPT_DIR/bin/ralph" "$BIN_DIR/"
@@ -100,6 +103,7 @@ install_ralph() {
     # Copy library directly to lib/ (not lib/ralph/) to match source path
     mkdir -p "$INSTALL_DIR/lib"
     cp "$SCRIPT_DIR/lib/ralph-core.sh" "$INSTALL_DIR/lib/"
+    cp "$SCRIPT_DIR/lib/ralph-watch.sh" "$INSTALL_DIR/lib/"
 
     # Install prompts
     info "Installing prompts..."
@@ -107,10 +111,23 @@ install_ralph() {
     cp -r "$SCRIPT_DIR/prompts" "$INSTALL_DIR/prompts"
     chmod 644 "$INSTALL_DIR/prompts"/*.md
 
-    # Install completions
+    # Install man page
+    if [[ -f "$SCRIPT_DIR/man/man1/ralph.1" ]]; then
+        info "Installing man page..."
+        cp "$SCRIPT_DIR/man/man1/ralph.1" "$MAN_DIR/"
+        chmod 644 "$MAN_DIR/ralph.1"
+    fi
+
+    # Install bash completions
     if [[ -f "$SCRIPT_DIR/completions/ralph.bash" ]]; then
         info "Installing bash completions..."
-        cp "$SCRIPT_DIR/completions/ralph.bash" "$COMPLETIONS_DIR/ralph"
+        cp "$SCRIPT_DIR/completions/ralph.bash" "$BASH_COMPLETIONS_DIR/ralph"
+    fi
+
+    # Install zsh completions
+    if [[ -f "$SCRIPT_DIR/completions/ralph.zsh" ]]; then
+        info "Installing zsh completions..."
+        cp "$SCRIPT_DIR/completions/ralph.zsh" "$ZSH_COMPLETIONS_DIR/_ralph"
     fi
 
     echo ""
@@ -124,6 +141,16 @@ install_ralph() {
         echo "Add this to your shell profile (~/.bashrc or ~/.zshrc):"
         echo ""
         echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+        echo ""
+    fi
+
+    # Check if man page is accessible
+    if ! man -w ralph &>/dev/null 2>&1; then
+        warn "Man page may not be accessible"
+        echo ""
+        echo "To access the man page, add to your shell profile:"
+        echo ""
+        echo "  export MANPATH=\"\$HOME/.local/share/man:\$MANPATH\""
         echo ""
     fi
 
@@ -150,10 +177,23 @@ uninstall_ralph() {
         success "Removed prompts"
     fi
 
-    if [[ -f "$COMPLETIONS_DIR/ralph" ]]; then
-        rm -f "$COMPLETIONS_DIR/ralph"
-        success "Removed completions"
+    if [[ -f "$MAN_DIR/ralph.1" ]]; then
+        rm -f "$MAN_DIR/ralph.1"
+        success "Removed man page"
     fi
+
+    if [[ -f "$BASH_COMPLETIONS_DIR/ralph" ]]; then
+        rm -f "$BASH_COMPLETIONS_DIR/ralph"
+        success "Removed bash completions"
+    fi
+
+    if [[ -f "$ZSH_COMPLETIONS_DIR/_ralph" ]]; then
+        rm -f "$ZSH_COMPLETIONS_DIR/_ralph"
+        success "Removed zsh completions"
+    fi
+
+    # Clean up lib files if they exist in alternate location
+    rm -f "$INSTALL_DIR/lib/ralph-core.sh" "$INSTALL_DIR/lib/ralph-watch.sh" 2>/dev/null || true
 
     success "Ralph Engine uninstalled"
 }
@@ -173,10 +213,29 @@ check_installation() {
     fi
 
     if [[ -f "$LIB_DIR/ralph-core.sh" ]]; then
-        success "Library found: $LIB_DIR/ralph-core.sh"
+        success "Core library found: $LIB_DIR/ralph-core.sh"
     else
-        error "Library not found: $LIB_DIR/ralph-core.sh"
+        error "Core library not found: $LIB_DIR/ralph-core.sh"
         ok=false
+    fi
+
+    if [[ -f "$LIB_DIR/ralph-watch.sh" ]]; then
+        success "Watch library found: $LIB_DIR/ralph-watch.sh"
+    else
+        warn "Watch library not found: $LIB_DIR/ralph-watch.sh"
+    fi
+
+    if [[ -f "$MAN_DIR/ralph.1" ]]; then
+        success "Man page found: $MAN_DIR/ralph.1"
+    else
+        warn "Man page not found: $MAN_DIR/ralph.1"
+    fi
+
+    # Check if man page is accessible
+    if man -w ralph &>/dev/null 2>&1; then
+        success "Man page accessible: man ralph"
+    else
+        warn "Man page not in MANPATH (try: export MANPATH=\"\$HOME/.local/share/man:\$MANPATH\")"
     fi
 
     echo ""

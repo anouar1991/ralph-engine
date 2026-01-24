@@ -10,13 +10,13 @@ _ralph_completions() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     # Commands
-    commands="init run status"
+    commands="init run status stack watch"
 
     # Determine if we're completing a command or option
     local cmd=""
     for ((i=1; i < COMP_CWORD; i++)); do
         case "${COMP_WORDS[i]}" in
-            init|run|status)
+            init|run|status|stack|watch)
                 cmd="${COMP_WORDS[i]}"
                 break
                 ;;
@@ -67,9 +67,22 @@ _ralph_completions() {
                     COMPREPLY=($(compgen -d -- "${cur}"))
                     return 0
                     ;;
+                --expansion-threshold)
+                    COMPREPLY=($(compgen -W "3 4 5" -- "${cur}"))
+                    return 0
+                    ;;
+                --max-stack-depth)
+                    COMPREPLY=($(compgen -W "1 2 3 4 5" -- "${cur}"))
+                    return 0
+                    ;;
+                --sudo-pass)
+                    # Complete environment variable names
+                    COMPREPLY=($(compgen -W "RALPH_SUDO_PASS SUDO_PASSWORD" -- "${cur}"))
+                    return 0
+                    ;;
             esac
             if [[ "${cur}" == -* ]]; then
-                COMPREPLY=($(compgen -W "-n --max-iterations -t --timeout -p --prd -o --output -q --quiet --no-verify --dry-run -h --help" -- "${cur}"))
+                COMPREPLY=($(compgen -W "-n --max-iterations -t --timeout -p --prd -o --output -q --quiet --no-verify --no-expand --expansion-threshold --max-stack-depth --sudo-pass --dry-run -h --help" -- "${cur}"))
             else
                 COMPREPLY=($(compgen -d -- "${cur}"))
             fi
@@ -84,6 +97,38 @@ _ralph_completions() {
             esac
             if [[ "${cur}" == -* ]]; then
                 COMPREPLY=($(compgen -W "-p --prd -h --help" -- "${cur}"))
+            else
+                COMPREPLY=($(compgen -d -- "${cur}"))
+            fi
+            return 0
+            ;;
+        stack)
+            case "${prev}" in
+                -p|--prd)
+                    COMPREPLY=($(compgen -f -X '!*.json' -- "${cur}"))
+                    return 0
+                    ;;
+            esac
+            if [[ "${cur}" == -* ]]; then
+                COMPREPLY=($(compgen -W "-p --prd -h --help" -- "${cur}"))
+            else
+                COMPREPLY=($(compgen -d -- "${cur}"))
+            fi
+            return 0
+            ;;
+        watch)
+            case "${prev}" in
+                -p|--prd)
+                    COMPREPLY=($(compgen -f -X '!*.json' -- "${cur}"))
+                    return 0
+                    ;;
+                -r|--refresh)
+                    COMPREPLY=($(compgen -W "1 2 3 5 10" -- "${cur}"))
+                    return 0
+                    ;;
+            esac
+            if [[ "${cur}" == -* ]]; then
+                COMPREPLY=($(compgen -W "-p --prd -r --refresh -h --help" -- "${cur}"))
             else
                 COMPREPLY=($(compgen -d -- "${cur}"))
             fi

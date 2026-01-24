@@ -1,0 +1,284 @@
+.\" Man page for ralph
+.\" Contact: Noreddine Belhadj Cheikh
+.\"
+.TH RALPH 1 "January 2026" "ralph 1.3.0" "User Commands"
+.SH NAME
+ralph \- autonomous task executor for Claude Code
+.SH SYNOPSIS
+.B ralph
+[\fIOPTIONS\fR] [\fIPROJECT_DIR\fR]
+.br
+.B ralph init
+[\fIOPTIONS\fR] \fIGOAL\fR
+.br
+.B ralph status
+[\fIPROJECT_DIR\fR]
+.br
+.B ralph stack
+[\fIPROJECT_DIR\fR]
+.br
+.B ralph watch
+[\fIOPTIONS\fR] [\fIPROJECT_DIR\fR]
+.SH DESCRIPTION
+.B ralph
+is an autonomous task executor that reads a PRD (Product Requirements Document) in JSON format, picks tasks based on dependencies and complexity, executes them using Claude Code, and commits the results to git.
+.PP
+Ralph operates in an iterative loop: read PRD, select task, execute with Claude, commit work, verify completion, repeat until all tasks are done.
+.SH COMMANDS
+.TP
+.B run
+(default) Execute the Ralph loop on a project. This is the default command when no subcommand is specified.
+.TP
+.B init
+Generate a prd.json file from a natural language goal description.
+.TP
+.B status
+Display current project progress including completed and pending tasks.
+.TP
+.B stack
+Show the PRD expansion stack status when working with sub-PRDs.
+.TP
+.B watch
+Launch a real-time terminal dashboard showing task progress.
+.SH OPTIONS
+.SS "Run Options"
+.TP
+.BR \-n ", " \-\-max\-iterations " " \fINUM\fR
+Maximum number of iterations before stopping. Default: 50.
+.TP
+.BR \-t ", " \-\-timeout " " \fISECONDS\fR
+Timeout per iteration in seconds. Default: 900 (15 minutes).
+.TP
+.BR \-p ", " \-\-prd " " \fIFILE\fR
+PRD filename to use. Default: prd.json.
+.TP
+.BR \-o ", " \-\-output " " \fIDIR\fR
+Output directory for logs. Default: /tmp/ralph.
+.TP
+.BR \-q ", " \-\-quiet
+Minimal output mode.
+.TP
+.B \-\-no\-verify
+Skip the verification step after each iteration.
+.TP
+.B \-\-no\-expand
+Disable automatic task expansion into sub-PRDs.
+.TP
+.BR \-\-expansion\-threshold " " \fIN\fR
+Complexity threshold for automatic expansion. Tasks with complexity >= N and >= 5 actions will be expanded. Default: 4.
+.TP
+.BR \-\-max\-stack\-depth " " \fIN\fR
+Maximum depth of nested sub-PRDs. Default: 3.
+.TP
+.BR \-\-sudo\-pass " " [\fIVAR\fR]
+Enable sudo password piping from environment variable. Default variable: RALPH_SUDO_PASS.
+.TP
+.B \-\-dry\-run
+Show what would be done without actually executing.
+.SS "Init Options"
+.TP
+.BR \-f ", " \-\-file " " \fIFILE\fR
+Read goal description from a file instead of command line argument.
+.TP
+.BR \-d ", " \-\-dir " " \fIDIR\fR
+Output directory for the generated prd.json. Default: current directory.
+.TP
+.BR \-p ", " \-\-prd " " \fIFILE\fR
+Output filename for the PRD. Default: prd.json.
+.TP
+.BR \-\-complexity " " \fINUM\fR
+Target number of tasks to generate. Default: automatic based on goal complexity.
+.TP
+.B \-\-dry\-run
+Preview the generated PRD without writing to disk.
+.SS "Watch Options"
+.TP
+.BR \-r ", " \-\-refresh " " \fISECONDS\fR
+Refresh interval for the dashboard. Default: 2 seconds.
+.TP
+.BR \-p ", " \-\-prd " " \fIFILE\fR
+PRD filename to watch. Default: prd.json.
+.SS "General Options"
+.TP
+.BR \-h ", " \-\-help
+Display help message for the command.
+.TP
+.BR \-v ", " \-\-version
+Display version information.
+.SH TASK EXPANSION
+Ralph can automatically expand complex tasks into sub-PRDs. This happens when:
+.IP \(bu 2
+A task has \fBexpand: true\fR set explicitly
+.IP \(bu 2
+A task has complexity >= threshold (default 4) AND >= 5 actions
+.IP \(bu 2
+Claude signals expansion is needed during execution
+.PP
+When a task is expanded:
+.IP 1. 3
+Ralph generates a sub-PRD (e.g., prd-T-200.json)
+.IP 2. 3
+The current state is pushed onto the stack
+.IP 3. 3
+Ralph works on the sub-PRD tasks
+.IP 4. 3
+When complete, the stack is popped and the parent task is marked done
+.PP
+Sub-task IDs follow the format \fBPARENT-XXX\fR (e.g., T-200-100, T-200-200).
+.SH WATCH DASHBOARD
+The watch command displays a real-time dashboard with:
+.IP \(bu 2
+Progress bar showing completion percentage
+.IP \(bu 2
+Task list with status icons
+.IP \(bu 2
+Complexity indicators for each task
+.IP \(bu 2
+Sub-PRD stack status
+.IP \(bu 2
+Recent git activity
+.PP
+.B Task Status Icons:
+.TS
+l l l .
+Icon	Status	Description
+_
+\[u2713]	Done	Task completed successfully
+\[u25C9]	Working	Task currently in progress
+\[u25CB]	Ready	Task ready to start
+\[u25CC]	Blocked	Waiting on dependencies
+\[u21B3]	Expanding	Task expanded into sub-PRD
+.TE
+.SH PRD FILE FORMAT
+The PRD file is a JSON document with a \fBtasks\fR array:
+.PP
+.nf
+{
+  "name": "Project Name",
+  "tasks": [
+    {
+      "id": "T-100",
+      "name": "Task name",
+      "pass": false,
+      "dependencies": [],
+      "complexity": 1,
+      "actions": ["Step 1", "Step 2"],
+      "guarantees": ["Guarantee 1"],
+      "validation": "test command"
+    }
+  ],
+  "ralph": {
+    "currentTaskId": null,
+    "history": []
+  }
+}
+.fi
+.PP
+.B Task Fields:
+.TS
+l l l .
+Field	Required	Description
+_
+id	Yes	Unique identifier (e.g., T-100)
+name	Yes	Human-readable task name
+pass	Yes	Completion status (true/false)
+dependencies	No	Array of task IDs that must complete first
+complexity	No	Difficulty rating 1-5
+actions	No	Steps to complete the task
+guarantees	No	What must be true when complete
+validation	No	Command to verify completion
+expand	No	Force expansion into sub-PRD
+expandGoal	No	Goal description for sub-PRD
+.TE
+.SH ENVIRONMENT
+.TP
+.B RALPH_MAX_ITERATIONS
+Override default maximum iterations.
+.TP
+.B RALPH_TIMEOUT
+Override default timeout per iteration.
+.TP
+.B RALPH_OUTPUT_DIR
+Override default output directory for logs.
+.TP
+.B RALPH_NO_EXPAND
+Disable automatic task expansion (true/false).
+.TP
+.B RALPH_EXPANSION_THRESHOLD
+Override complexity threshold for expansion.
+.TP
+.B RALPH_MAX_STACK_DEPTH
+Override maximum sub-PRD nesting depth.
+.TP
+.B RALPH_SUDO_PASS
+Sudo password for privileged commands (with --sudo-pass).
+.TP
+.B NO_COLOR
+Disable colored output when set.
+.SH FILES
+.TP
+.I prd.json
+Default PRD file in project directory.
+.TP
+.I prd-T-XXX.json
+Sub-PRD files for expanded tasks.
+.TP
+.I /tmp/ralph/
+Default output directory for iteration logs.
+.TP
+.I AGENTS.md
+Knowledge base files created by Claude in project directories.
+.SH EXAMPLES
+Generate a PRD from a goal:
+.PP
+.nf
+ralph init "Build a REST API for user management"
+.fi
+.PP
+Run Ralph on current directory:
+.PP
+.nf
+ralph
+.fi
+.PP
+Run with custom settings:
+.PP
+.nf
+ralph -n 100 -t 1800 ~/my-project
+.fi
+.PP
+Watch progress in real-time:
+.PP
+.nf
+ralph watch &
+ralph
+.fi
+.PP
+Check expansion stack:
+.PP
+.nf
+ralph stack
+.fi
+.PP
+Disable automatic expansion:
+.PP
+.nf
+ralph --no-expand
+.fi
+.SH EXIT STATUS
+.TP
+.B 0
+All tasks completed successfully.
+.TP
+.B 1
+Error occurred or maximum iterations reached.
+.SH BUGS
+Report bugs at: https://github.com/anouar1991/ralph-engine/issues
+.SH AUTHOR
+Noreddine Belhadj Cheikh
+.SH SEE ALSO
+.BR claude (1),
+.BR git (1),
+.BR jq (1)
+.SH COPYRIGHT
+MIT License

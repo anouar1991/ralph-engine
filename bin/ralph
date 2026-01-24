@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # Version
-readonly RALPH_VERSION="1.1.0"
+readonly RALPH_VERSION="1.3.0"
 
 # Determine script location for library loading
 RALPH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,6 +18,10 @@ readonly RALPH_ROOT
 # Source core library
 # shellcheck source=../lib/ralph-core.sh
 source "${RALPH_ROOT}/lib/ralph-core.sh"
+
+# Source watch library
+# shellcheck source=../lib/ralph-watch.sh
+source "${RALPH_ROOT}/lib/ralph-watch.sh"
 
 # Default configuration
 DEFAULT_MAX_ITERATIONS=50
@@ -50,17 +54,25 @@ USAGE:
     ralph [OPTIONS] [PROJECT_DIR]        Run the task loop
     ralph init [OPTIONS] <GOAL>          Generate prd.json from a goal
     ralph status [PROJECT_DIR]           Show project status
+    ralph stack [PROJECT_DIR]            Show PRD stack status
+    ralph watch [PROJECT_DIR]            Real-time task visualization
+    ralph flow [PROJECT_DIR]             Task dependency flow diagram
 
 COMMANDS:
     run (default)    Execute the Ralph loop on a project
     init             Generate a prd.json from a goal description
     status           Show current project progress
+    stack            Show PRD expansion stack status
+    watch            Live dashboard showing task progress
+    flow             Dependency flow visualization
 
 Run 'ralph <command> --help' for command-specific help.
 
 QUICK START:
     ralph init "Build a CLI tool for managing todos"
-    ralph
+    ralph flow       # View task dependency tree
+    ralph watch &    # Start live dashboard in background
+    ralph            # Run the task loop
 
 For more information, see: https://github.com/anouar1991/ralph-engine
 
@@ -72,10 +84,11 @@ usage_run() {
 ralph run - Execute the Ralph loop
 
 USAGE:
-    ralph [run] [OPTIONS] [PROJECT_DIR]
+    ralph [run] [OPTIONS] [PROJECT_DIR] [-- CLAUDE_ARGS...]
 
 ARGUMENTS:
     PROJECT_DIR    Directory containing prd.json (default: current directory)
+    CLAUDE_ARGS    Extra arguments passed directly to claude (after --)
 
 OPTIONS:
     -n, --max-iterations NUM    Maximum iterations (default: $DEFAULT_MAX_ITERATIONS)
@@ -84,24 +97,34 @@ OPTIONS:
     -o, --output DIR            Output directory for logs (default: $DEFAULT_OUTPUT_DIR)
     -q, --quiet                 Minimal output
         --no-verify             Skip verification step after each iteration
+        --no-expand             Disable automatic task expansion into sub-PRDs
+        --expansion-threshold N Complexity threshold for auto-expansion (default: 4)
+        --max-stack-depth N     Maximum nested sub-PRD depth (default: 3)
         --sudo-pass [VAR]       Enable sudo password piping from env var (default: RALPH_SUDO_PASS)
         --dry-run               Show what would be done without executing
     -h, --help                  Show this help message
 
 ENVIRONMENT VARIABLES:
-    RALPH_MAX_ITERATIONS    Override default max iterations
-    RALPH_TIMEOUT           Override default timeout
-    RALPH_OUTPUT_DIR        Override default output directory
-    RALPH_SUDO_PASS         Sudo password for privileged commands (with --sudo-pass)
-    NO_COLOR                Disable colored output
+    RALPH_MAX_ITERATIONS      Override default max iterations
+    RALPH_TIMEOUT             Override default timeout
+    RALPH_OUTPUT_DIR          Override default output directory
+    RALPH_SUDO_PASS           Sudo password for privileged commands (with --sudo-pass)
+    RALPH_NO_EXPAND           Disable automatic expansion (true/false)
+    RALPH_EXPANSION_THRESHOLD Override expansion threshold
+    RALPH_MAX_STACK_DEPTH     Override max stack depth
+    RALPH_CLAUDE_ARGS         Extra arguments to pass to claude command
+    NO_COLOR                  Disable colored output
 
 EXAMPLES:
     ralph                           # Run in current directory
     ralph ~/my-project              # Run in specific directory
     ralph -n 100 -t 1800            # 100 iterations, 30min timeout each
     ralph --dry-run                 # Preview without executing
+    ralph --no-expand               # Disable automatic task expansion
+    ralph --expansion-threshold 5   # Only expand tasks with complexity >= 5
     ralph --sudo-pass               # Enable sudo with RALPH_SUDO_PASS env var
-    RALPH_SUDO_PASS=secret ralph --sudo-pass  # Provide password inline
+    ralph -- --allowedTools Bash    # Pass --allowedTools to claude
+    ralph -- --dangerously-skip-permissions  # Skip claude permission prompts
 
 EOF
 }
@@ -111,11 +134,12 @@ usage_init() {
 ralph init - Generate prd.json from a goal description
 
 USAGE:
-    ralph init [OPTIONS] <GOAL>
-    ralph init [OPTIONS] -f <FILE>
+    ralph init [OPTIONS] <GOAL> [-- CLAUDE_ARGS...]
+    ralph init [OPTIONS] -f <FILE> [-- CLAUDE_ARGS...]
 
 ARGUMENTS:
-    GOAL    Goal description as text (quote multi-word goals)
+    GOAL         Goal description as text (quote multi-word goals)
+    CLAUDE_ARGS  Extra arguments passed directly to claude (after --)
 
 OPTIONS:
     -f, --file FILE       Read goal from file instead of argument
@@ -130,6 +154,7 @@ EXAMPLES:
     ralph init -f requirements.txt -d ~/my-project
     ralph init "Create a CLI todo app" --complexity 20
     ralph init -f goal.md --dry-run
+    ralph init "Scrape website data" -- --chrome
 
 GOAL FILE FORMAT:
     The goal file can be plain text or markdown describing:
@@ -158,9 +183,132 @@ OPTIONS:
 EOF
 }
 
+usage_stack() {
+    cat <<EOF
+ralph stack - Show PRD expansion stack status
+
+USAGE:
+    ralph stack [PROJECT_DIR]
+
+ARGUMENTS:
+    PROJECT_DIR    Directory containing prd.json (default: current directory)
+
+OPTIONS:
+    -p, --prd FILE    PRD file name (default: $DEFAULT_PRD_FILE)
+    -h, --help        Show this help message
+
+DESCRIPTION:
+    Shows the current state of the PRD expansion stack, including:
+    - Current stack depth
+    - Active PRD file (main or sub-PRD)
+    - Parent tasks that have been expanded
+    - When each expansion was started
+
+    This is useful for understanding where Ralph is in the task hierarchy
+    when working with complex tasks that have been automatically expanded
+    into sub-PRDs.
+
+EXAMPLES:
+    ralph stack                     # Show stack for current directory
+    ralph stack ~/my-project        # Show stack for specific project
+
+EOF
+}
+
+usage_watch() {
+    cat <<EOF
+ralph watch - Real-time task visualization dashboard
+
+USAGE:
+    ralph watch [OPTIONS] [PROJECT_DIR]
+
+ARGUMENTS:
+    PROJECT_DIR    Directory containing prd.json (default: current directory)
+
+OPTIONS:
+    -p, --prd FILE        PRD file name (default: $DEFAULT_PRD_FILE)
+    -r, --refresh SECS    Refresh interval in seconds (default: 2)
+    -h, --help            Show this help message
+
+DESCRIPTION:
+    Provides a beautiful real-time terminal dashboard showing:
+    - Overall progress with progress bar
+    - Task list with status icons (done/working/pending/blocked)
+    - Complexity indicators for each task
+    - Sub-PRD stack status when expanding tasks
+    - Recent git activity
+
+    The display updates automatically at the specified refresh interval.
+    Press Ctrl+C to exit.
+
+TASK STATUS ICONS:
+    $ICON_DONE  Done       - Task completed successfully
+    $ICON_WORKING  Working    - Task currently in progress
+    $ICON_PENDING  Ready      - Task ready to start (dependencies met)
+    $ICON_BLOCKED  Blocked    - Waiting on dependencies
+    $ICON_EXPANDING  Expanding  - Task expanded into sub-PRD
+
+EXAMPLES:
+    ralph watch                     # Watch current project
+    ralph watch ~/my-project        # Watch specific project
+    ralph watch -r 5                # Refresh every 5 seconds
+    ralph watch & ralph             # Run dashboard alongside ralph
+
+EOF
+}
+
+usage_flow() {
+    cat <<EOF
+ralph flow - Task dependency flow visualization
+
+USAGE:
+    ralph flow [OPTIONS] [PROJECT_DIR]
+
+ARGUMENTS:
+    PROJECT_DIR    Directory containing prd.json (default: current directory)
+
+OPTIONS:
+    -p, --prd FILE        PRD file name (default: $DEFAULT_PRD_FILE)
+    -r, --refresh SECS    Refresh interval in seconds (default: 2)
+    -h, --help            Show this help message
+
+DESCRIPTION:
+    Shows a visual tree of task dependencies, from the project goal
+    down through the task hierarchy. Useful for understanding:
+    - Which tasks have no dependencies (can start immediately)
+    - How tasks depend on each other
+    - The critical path through your project
+
+    The display updates automatically. Press Ctrl+C to exit.
+
+FLOW DIAGRAM:
+    ◆ Project Goal
+    │
+    ├──▶ ✓ T-100 (root task, no dependencies)
+    │   └──▶ ○ T-200 (depends on T-100)
+    │       └──▶ ◌ T-300 (depends on T-200)
+    └──▶ ✓ T-110 (another root task)
+
+LEGEND:
+    ◆  Project goal
+    ✓  Task completed
+    ○  Task ready (dependencies met)
+    ◌  Task blocked (waiting on dependencies)
+
+EXAMPLES:
+    ralph flow                      # View flow for current project
+    ralph flow ~/my-project         # View flow for specific project
+    ralph flow -r 5                 # Refresh every 5 seconds
+
+EOF
+}
+
 version() {
     echo "ralph $RALPH_VERSION"
 }
+
+# Extra arguments to pass to claude
+CLAUDE_EXTRA_ARGS=""
 
 # Parse run command arguments
 parse_run_args() {
@@ -170,6 +318,14 @@ parse_run_args() {
     OUTPUT_DIR="${RALPH_OUTPUT_DIR:-$DEFAULT_OUTPUT_DIR}"
     PRD_FILE="$DEFAULT_PRD_FILE"
     PROJECT_DIR="."
+
+    # Extra claude args from environment or empty
+    CLAUDE_EXTRA_ARGS="${RALPH_CLAUDE_ARGS:-}"
+
+    # Expansion configuration (exported for use in ralph-core.sh)
+    export RALPH_NO_EXPAND="${RALPH_NO_EXPAND:-false}"
+    export RALPH_EXPANSION_THRESHOLD="${RALPH_EXPANSION_THRESHOLD:-4}"
+    export RALPH_MAX_STACK_DEPTH="${RALPH_MAX_STACK_DEPTH:-3}"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -197,6 +353,18 @@ parse_run_args() {
                 NO_VERIFY=true
                 shift
                 ;;
+            --no-expand)
+                export RALPH_NO_EXPAND=true
+                shift
+                ;;
+            --expansion-threshold)
+                export RALPH_EXPANSION_THRESHOLD="$2"
+                shift 2
+                ;;
+            --max-stack-depth)
+                export RALPH_MAX_STACK_DEPTH="$2"
+                shift 2
+                ;;
             --sudo-pass)
                 # Check if next arg is a custom var name (not another flag)
                 if [[ -n "${2:-}" ]] && [[ ! "$2" =~ ^- ]]; then
@@ -218,6 +386,12 @@ parse_run_args() {
             -v|--version)
                 version
                 exit 0
+                ;;
+            --)
+                # Everything after -- is passed to claude
+                shift
+                CLAUDE_EXTRA_ARGS="$*"
+                break
                 ;;
             -*)
                 error "Unknown option: $1"
@@ -242,8 +416,9 @@ parse_run_args() {
     fi
 
     # Resolve project directory
-    PROJECT_DIR="$(cd "$PROJECT_DIR" 2>/dev/null && pwd)" || {
-        error "Project directory not found: $PROJECT_DIR"
+    local original_dir="$PROJECT_DIR"
+    PROJECT_DIR="$(cd "$original_dir" 2>/dev/null && pwd)" || {
+        error "Project directory not found: $original_dir"
         exit 1
     }
 
@@ -255,6 +430,7 @@ parse_run_args() {
 parse_init_args() {
     INIT_OUTPUT_DIR="."
     PRD_FILE="$DEFAULT_PRD_FILE"
+    CLAUDE_EXTRA_ARGS="${RALPH_CLAUDE_ARGS:-}"
     local complexity=""
 
     while [[ $# -gt 0 ]]; do
@@ -282,6 +458,12 @@ parse_init_args() {
             -h|--help)
                 usage_init
                 exit 0
+                ;;
+            --)
+                # Everything after -- is passed to claude
+                shift
+                CLAUDE_EXTRA_ARGS="$*"
+                break
                 ;;
             -*)
                 error "Unknown option: $1"
@@ -350,8 +532,137 @@ parse_status_args() {
         esac
     done
 
-    PROJECT_DIR="$(cd "$PROJECT_DIR" 2>/dev/null && pwd)" || {
-        error "Project directory not found: $PROJECT_DIR"
+    local original_dir="$PROJECT_DIR"
+    PROJECT_DIR="$(cd "$original_dir" 2>/dev/null && pwd)" || {
+        error "Project directory not found: $original_dir"
+        exit 1
+    }
+    PRD_FILE="$PROJECT_DIR/$PRD_FILE"
+}
+
+# Parse stack command arguments
+parse_stack_args() {
+    PRD_FILE="$DEFAULT_PRD_FILE"
+    PROJECT_DIR="."
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--prd)
+                PRD_FILE="$2"
+                shift 2
+                ;;
+            -h|--help)
+                usage_stack
+                exit 0
+                ;;
+            -*)
+                error "Unknown option: $1"
+                exit 1
+                ;;
+            *)
+                PROJECT_DIR="$1"
+                shift
+                ;;
+        esac
+    done
+
+    local original_dir="$PROJECT_DIR"
+    PROJECT_DIR="$(cd "$original_dir" 2>/dev/null && pwd)" || {
+        error "Project directory not found: $original_dir"
+        exit 1
+    }
+    PRD_FILE="$PROJECT_DIR/$PRD_FILE"
+}
+
+# Parse watch command arguments
+WATCH_REFRESH_INTERVAL=2
+
+parse_watch_args() {
+    PRD_FILE="$DEFAULT_PRD_FILE"
+    PROJECT_DIR="."
+    WATCH_REFRESH_INTERVAL=2
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--prd)
+                PRD_FILE="$2"
+                shift 2
+                ;;
+            -r|--refresh)
+                WATCH_REFRESH_INTERVAL="$2"
+                shift 2
+                ;;
+            -h|--help)
+                usage_watch
+                exit 0
+                ;;
+            -*)
+                error "Unknown option: $1"
+                exit 1
+                ;;
+            *)
+                PROJECT_DIR="$1"
+                shift
+                ;;
+        esac
+    done
+
+    # Validate refresh interval
+    if ! [[ "$WATCH_REFRESH_INTERVAL" =~ ^[0-9]+$ ]]; then
+        error "Invalid refresh interval: $WATCH_REFRESH_INTERVAL (must be a number)"
+        exit 1
+    fi
+
+    local original_dir="$PROJECT_DIR"
+    PROJECT_DIR="$(cd "$original_dir" 2>/dev/null && pwd)" || {
+        error "Project directory not found: $original_dir"
+        exit 1
+    }
+    PRD_FILE="$PROJECT_DIR/$PRD_FILE"
+}
+
+# Parse flow command arguments
+FLOW_REFRESH_INTERVAL=2
+
+parse_flow_args() {
+    PRD_FILE="$DEFAULT_PRD_FILE"
+    PROJECT_DIR="."
+    FLOW_REFRESH_INTERVAL=2
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--prd)
+                PRD_FILE="$2"
+                shift 2
+                ;;
+            -r|--refresh)
+                FLOW_REFRESH_INTERVAL="$2"
+                shift 2
+                ;;
+            -h|--help)
+                usage_flow
+                exit 0
+                ;;
+            -*)
+                error "Unknown option: $1"
+                exit 1
+                ;;
+            *)
+                PROJECT_DIR="$1"
+                shift
+                ;;
+        esac
+    done
+
+    # Validate refresh interval
+    if ! [[ "$FLOW_REFRESH_INTERVAL" =~ ^[0-9]+$ ]]; then
+        error "Invalid refresh interval: $FLOW_REFRESH_INTERVAL (must be a number)"
+        exit 1
+    fi
+
+    local original_dir="$PROJECT_DIR"
+    PROJECT_DIR="$(cd "$original_dir" 2>/dev/null && pwd)" || {
+        error "Project directory not found: $original_dir"
         exit 1
     }
     PRD_FILE="$PROJECT_DIR/$PRD_FILE"
@@ -423,6 +734,12 @@ show_config() {
     local completed
     completed=$(jq '[.tasks[] | select(.pass == true)] | length' "$PRD_FILE")
 
+    # Check for active sub-PRD
+    local active_sub
+    active_sub=$(jq -r '.ralph.activeSubPrdFile // empty' "$PRD_FILE" 2>/dev/null)
+    local stack_depth
+    stack_depth=$(jq '.ralph.prdStack | length // 0' "$PRD_FILE" 2>/dev/null || echo 0)
+
     banner "RALPH ENGINE v$RALPH_VERSION"
     echo ""
     info "Configuration:"
@@ -434,6 +751,20 @@ show_config() {
     echo "  Output:       $OUTPUT_DIR"
     echo "  Verify:       $([[ "$NO_VERIFY" == true ]] && echo "disabled" || echo "enabled")"
     echo "  Sudo:         $([[ -n "$SUDO_PASS_VAR" ]] && echo "enabled (\$$SUDO_PASS_VAR)" || echo "disabled")"
+    echo ""
+    info "Expansion Settings:"
+    echo "  Auto-expand:  $([[ "$RALPH_NO_EXPAND" == true ]] && echo "disabled" || echo "enabled")"
+    echo "  Threshold:    complexity >= $RALPH_EXPANSION_THRESHOLD with 5+ actions"
+    echo "  Max Depth:    $RALPH_MAX_STACK_DEPTH nested sub-PRDs"
+    if [[ -n "$active_sub" ]]; then
+        echo ""
+        echo -e "  ${YELLOW}Active Sub-PRD: $active_sub (depth: $stack_depth)${NC}"
+    fi
+    if [[ -n "$CLAUDE_EXTRA_ARGS" ]]; then
+        echo ""
+        info "Claude Extra Args:"
+        echo "  $CLAUDE_EXTRA_ARGS"
+    fi
     echo ""
 }
 
@@ -449,6 +780,9 @@ cmd_run() {
         echo "  Iterations: $MAX_ITERATIONS"
         echo "  Timeout:    ${ITERATION_TIMEOUT}s"
         echo "  Sudo:       $([[ -n "$SUDO_PASS_VAR" ]] && echo "enabled (\$$SUDO_PASS_VAR)" || echo "disabled")"
+        if [[ -n "$CLAUDE_EXTRA_ARGS" ]]; then
+            echo "  Claude:     $CLAUDE_EXTRA_ARGS"
+        fi
         exit 0
     fi
 
@@ -460,6 +794,9 @@ cmd_run() {
         # Export for use in core functions
         export SUDO_PASS_VAR
     fi
+
+    # Export extra claude args for use in core functions
+    export CLAUDE_EXTRA_ARGS
 
     validate_env
 
@@ -479,6 +816,9 @@ cmd_run() {
 # Init command
 cmd_init() {
     parse_init_args "$@"
+
+    # Export extra claude args for use in generate_prd
+    export CLAUDE_EXTRA_ARGS
 
     # Check for claude
     if ! command -v claude &>/dev/null; then
@@ -620,6 +960,111 @@ cmd_status() {
     echo ""
 }
 
+# Stack command
+cmd_stack() {
+    parse_stack_args "$@"
+
+    if [[ ! -f "$PRD_FILE" ]]; then
+        error "PRD file not found: $PRD_FILE"
+        exit 1
+    fi
+
+    # Set MAIN_PRD_FILE for stack functions
+    export MAIN_PRD_FILE="$PRD_FILE"
+
+    banner "RALPH ENGINE v$RALPH_VERSION"
+
+    # Use the show_stack_status function from ralph-core.sh
+    show_stack_status
+
+    # Show additional info about sub-PRDs in the project
+    local sub_prds
+    sub_prds=$(find "$(dirname "$PRD_FILE")" -maxdepth 1 -name "prd-*.json" -type f 2>/dev/null)
+
+    if [[ -n "$sub_prds" ]]; then
+        echo -e "${CYAN}Sub-PRD Files in Project:${NC}"
+        echo ""
+        while IFS= read -r sub_prd; do
+            local sub_name parent_id completed total status_icon
+            sub_name=$(basename "$sub_prd")
+            parent_id=$(jq -r '.parentTaskId // "unknown"' "$sub_prd" 2>/dev/null)
+            total=$(jq '.tasks | length' "$sub_prd" 2>/dev/null || echo 0)
+            completed=$(jq '[.tasks[] | select(.pass == true)] | length' "$sub_prd" 2>/dev/null || echo 0)
+
+            if jq -e '.completed == true' "$sub_prd" &>/dev/null; then
+                status_icon="${GREEN}[DONE]${NC}"
+            elif [[ "$completed" -eq "$total" ]] && [[ "$total" -gt 0 ]]; then
+                status_icon="${GREEN}[DONE]${NC}"
+            else
+                status_icon="${YELLOW}[$completed/$total]${NC}"
+            fi
+
+            echo -e "  $status_icon $sub_name (parent: $parent_id)"
+        done <<< "$sub_prds"
+        echo ""
+    else
+        echo -e "${BLUE}No sub-PRD files found in project.${NC}"
+        echo ""
+    fi
+
+    # Show expandable tasks in main PRD
+    local expandable
+    expandable=$(jq -r '
+        .tasks[] |
+        select(
+            .expand == true or
+            ((.complexity // 0) >= 4 and ((.actions // []) | length) >= 5)
+        ) |
+        "  \(.id): \(.name) (complexity: \(.complexity // "?"))"
+    ' "$PRD_FILE" 2>/dev/null)
+
+    if [[ -n "$expandable" ]]; then
+        echo -e "${MAGENTA}Tasks Marked for Expansion:${NC}"
+        echo "$expandable"
+        echo ""
+    fi
+}
+
+# Watch command
+cmd_watch() {
+    parse_watch_args "$@"
+
+    if [[ ! -f "$PRD_FILE" ]]; then
+        error "PRD file not found: $PRD_FILE"
+        exit 1
+    fi
+
+    # Check for jq
+    if ! command -v jq &>/dev/null; then
+        error "jq not found in PATH"
+        echo "Install jq: https://stedolan.github.io/jq/download/"
+        exit 1
+    fi
+
+    # Run the watch display
+    run_watch "$PRD_FILE" "$PROJECT_DIR" "$WATCH_REFRESH_INTERVAL"
+}
+
+# Flow command
+cmd_flow() {
+    parse_flow_args "$@"
+
+    if [[ ! -f "$PRD_FILE" ]]; then
+        error "PRD file not found: $PRD_FILE"
+        exit 1
+    fi
+
+    # Check for jq
+    if ! command -v jq &>/dev/null; then
+        error "jq not found in PATH"
+        echo "Install jq: https://stedolan.github.io/jq/download/"
+        exit 1
+    fi
+
+    # Run the flow display
+    run_flow "$PRD_FILE" "$PROJECT_DIR" "$FLOW_REFRESH_INTERVAL"
+}
+
 # Main entry point
 main() {
     # Setup colors early (respects NO_COLOR)
@@ -651,6 +1096,18 @@ main() {
         status)
             shift
             cmd_status "$@"
+            ;;
+        stack)
+            shift
+            cmd_stack "$@"
+            ;;
+        watch)
+            shift
+            cmd_watch "$@"
+            ;;
+        flow)
+            shift
+            cmd_flow "$@"
             ;;
         -h|--help)
             usage

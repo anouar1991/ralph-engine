@@ -1,5 +1,7 @@
 # Ralph Loop - Iteration {{ITERATION}}
 
+{{SUB_PRD_CONTEXT}}
+
 ## Context from Git Memory
 
 ### Recent Commits (your previous work):
@@ -108,6 +110,33 @@ Brief description of what this directory contains.
 3. **Git is your memory** - Commit after each task with detailed message
 4. **Follow dependencies strictly** - Never skip ahead
 5. **Validate before marking done** - Run validation checks
+
+## Task Expansion
+
+If you encounter a task that is too complex to complete in a single iteration (complexity >= 4 with many actions), you can signal that it needs expansion into a sub-PRD.
+
+**When to signal expansion:**
+- Task has 5+ distinct actions that each require significant work
+- Task spans multiple concerns (e.g., "implement full auth system")
+- You realize mid-task that breaking it down would be more effective
+
+**How to signal expansion:**
+
+```
+<expansion-needed>
+Task T-XXX requires expansion.
+Goal: "Brief description of what needs to be achieved"
+</expansion-needed>
+```
+
+After outputting this signal, stop working on the task. Ralph will automatically:
+1. Generate a sub-PRD for this task
+2. Execute the sub-PRD tasks
+3. Mark the original task complete when the sub-PRD finishes
+
+**Note:** Don't signal expansion for simple tasks or tasks you can complete. Only use this when genuine decomposition would help.
+
+---
 
 ## Completion
 
