@@ -55,6 +55,43 @@ banner() {
     echo -e "${NC}"
 }
 
+# Load prompt template from file
+# Usage: load_prompt "prompt-name" [VAR1=value1] [VAR2=value2] ...
+load_prompt() {
+    local prompt_name="$1"
+    shift
+
+    # Determine prompts directory
+    local prompts_dir="${RALPH_PROMPTS_DIR:-${RALPH_ROOT}/prompts}"
+    local prompt_file="$prompts_dir/${prompt_name}.md"
+
+    # Check if prompt file exists
+    if [[ ! -f "$prompt_file" ]]; then
+        error "Prompt file not found: $prompt_file"
+        return 1
+    fi
+
+    # Read the template
+    local content
+    content=$(cat "$prompt_file")
+
+    # Substitute variables passed as arguments (VAR=value format)
+    for arg in "$@"; do
+        local var_name="${arg%%=*}"
+        local var_value="${arg#*=}"
+        # Escape special characters in value for sed
+        var_value=$(printf '%s\n' "$var_value" | sed 's/[&/\]/\\&/g')
+        content=$(echo "$content" | sed "s|{{${var_name}}}|${var_value}|g")
+    done
+
+    echo "$content"
+}
+
+# Get custom prompts directory (user can override)
+get_prompts_dir() {
+    echo "${RALPH_PROMPTS_DIR:-${RALPH_ROOT}/prompts}"
+}
+
 # Get completed tasks from git history
 get_completed_tasks() {
     git log --oneline --grep="Complete T-" --format="%s" 2>/dev/null | \
@@ -120,6 +157,7 @@ build_prompt() {
 
     local agents_files
     agents_files=$(find . -name "AGENTS.md" -type f 2>/dev/null | head -5)
+    [[ -z "$agents_files" ]] && agents_files="(none yet)"
 
     local dir_structure
     dir_structure=$(find . -type d \
@@ -127,96 +165,13 @@ build_prompt() {
         -not -path './node_modules/*' \
         -not -path './target/*' 2>/dev/null | head -20)
 
-    cat <<EOF
-# Ralph Loop - Iteration $iteration
-
-## Context from Git Memory
-
-### Recent Commits (your previous work):
-\`\`\`
-$git_log
-\`\`\`
-
-### Completed Tasks: [$completed_tasks]
-
-### Existing AGENTS.md files:
-$agents_files
-
-## Your Task This Iteration
-
-1. **Read prd.json** to see all tasks and their dependencies
-2. **Find ONE task** where:
-   - \`pass: false\`
-   - All \`dependencies\` are in completed list above OR have \`pass: true\`
-   - Prefer lower complexity for momentum
-3. **Execute that task completely**:
-   - Follow all \`actions\`
-   - Verify all \`guarantees\`
-   - Run \`validation\` checks
-4. **Update prd.json**: Set \`pass: true\` for the completed task
-5. **Create/Update AGENTS.md** in the relevant directory with lessons learned
-6. **Commit your work**:
-   \`\`\`bash
-   git add -A
-   git commit -m "Complete T-XXX: Task Name
-
-   - What was done
-   - Key decisions made
-   - Lessons learned"
-   \`\`\`
-
-## AGENTS.md Format
-
-Create in each coherent directory (src/, src/components/, src-tauri/, etc.):
-
-\`\`\`markdown
-# Agents Knowledge Base
-
-## Directory Purpose
-Brief description of what this directory contains.
-
-## Patterns & Conventions
-- Pattern 1: Description
-- Pattern 2: Description
-
-## Lessons Learned
-- [T-XXX] Lesson from task
-- [T-YYY] Another lesson
-
-## Gotchas & Warnings
-- Warning about something tricky
-
-## Dependencies & Relationships
-- Depends on: ../other-dir
-- Used by: ../consumer-dir
-\`\`\`
-
-## Rules
-
-1. **ONE task per iteration** - Complete fully before stopping
-2. **Git is your memory** - Commit after each task with detailed message
-3. **AGENTS.md is your knowledge base** - Document lessons in relevant directories
-4. **Follow dependencies strictly** - Never skip ahead
-5. **Validate before marking done** - Run all validation checks
-
-## Completion
-
-When ALL tasks have \`pass: true\`, output exactly:
-
-\`\`\`
-<promise>PROJECT COMPLETE</promise>
-\`\`\`
-
-## Current Directory Structure
-
-\`\`\`
-$dir_structure
-\`\`\`
-
-## Start Now
-
-Read prd.json, pick ONE task, complete it, commit, and stop.
-EOF
+    # Use external template
+    load_prompt "iteration" \
+        "ITERATION=$iteration" \
+        "GIT_LOG=$git_log" \
+        "COMPLETED_TASKS=$completed_tasks" \
+        "AGENTS_FILES=$agents_files" \
+        "DIR_STRUCTURE=$dir_structure"
 }
 
 # Activity monitor (background process)
@@ -333,46 +288,11 @@ verify_with_claude() {
     last_commit=$(git log -1 --oneline 2>/dev/null)
     ralph_section=$(jq '.ralph' "$PRD_FILE" 2>/dev/null)
 
-    cat > "$verify_prompt_file" <<EOF
-# Verification Task
-
-Check if the last iteration completed properly. Fix any issues.
-
-## Current State
-
-Git status:
-\`\`\`
-$git_status
-\`\`\`
-
-Last commit:
-\`\`\`
-$last_commit
-\`\`\`
-
-prd.json ralph section:
-\`\`\`json
-$ralph_section
-\`\`\`
-
-## Checklist
-
-1. Was a commit made with format "Complete T-XXX: Task Name"?
-2. Does prd.json have pass: true for the completed task?
-3. Is ralph.currentTaskId updated?
-4. Is ralph.history updated?
-
-## Actions
-
-- If uncommitted work exists: commit it with proper format
-- If prd.json not updated: update pass: true and commit
-- If all good: do nothing
-
-Respond with exactly one of:
-- VERIFIED (all checks passed)
-- FIXED (issues found and resolved)
-- FAILED (could not fix)
-EOF
+    # Use external template
+    load_prompt "verification" \
+        "GIT_STATUS=$git_status" \
+        "LAST_COMMIT=$last_commit" \
+        "RALPH_SECTION=$ralph_section" > "$verify_prompt_file"
 
     info "Running verification..."
     timeout 60 claude --print --dangerously-skip-permissions < "$verify_prompt_file" > "$verify_output_file" 2>&1 || true
@@ -520,76 +440,16 @@ generate_prd() {
         complexity_hint="Choose an appropriate number of tasks based on project scope (typically 10-50)."
     fi
 
-    # Create the prompt
-    cat > "$prompt_file" <<EOF
-# Generate PRD for Ralph Engine
+    # Create the prompt using external template
+    load_prompt "prd-generation" \
+        "GOAL=$goal" \
+        "COMPLEXITY_HINT=$complexity_hint" > "$prompt_file"
 
-You are a technical product manager creating a PRD (Product Requirements Document) for an autonomous AI coding agent.
-
-## Goal
-
-$goal
-
-## Requirements
-
-$complexity_hint
-
-Create a prd.json file with this EXACT structure:
-
-\`\`\`json
-{
-  "name": "Project Name",
-  "description": "Brief project description",
-  "tasks": [
-    {
-      "id": "T-100",
-      "name": "Task name",
-      "description": "Detailed task description",
-      "pass": false,
-      "dependencies": [],
-      "complexity": 1,
-      "actions": ["Step 1", "Step 2"],
-      "guarantees": ["What must be true when done"],
-      "validation": "How to verify completion"
-    }
-  ],
-  "ralph": {
-    "currentTaskId": null,
-    "history": [],
-    "startedAt": null
-  }
-}
-\`\`\`
-
-## Task Design Rules
-
-1. **IDs**: Use T-100, T-110, T-120... (increment by 10 for flexibility)
-2. **Dependencies**: List task IDs that must complete first (e.g., ["T-100", "T-110"])
-3. **Complexity**: Rate 1-5 (1=trivial, 3=medium, 5=complex)
-4. **Order**: Start with setup/foundation, end with integration/polish
-5. **Granularity**: Each task should be completable in one iteration (15-30 min)
-6. **Validation**: Include concrete ways to verify completion
-
-## Task Categories (in order)
-
-1. **Setup** (T-100s): Project structure, dependencies, configuration
-2. **Core** (T-200s): Main functionality, core features
-3. **Features** (T-300s): Additional features, enhancements
-4. **Integration** (T-400s): Connect components, API endpoints
-5. **Polish** (T-500s): Error handling, edge cases, cleanup
-6. **Testing** (T-600s): Tests, validation, documentation
-
-## Output
-
-Return ONLY the JSON object. No markdown code blocks, no explanation, just valid JSON.
-Start with { and end with }
-EOF
-
-    # Call Claude (info to stderr so it doesn't pollute stdout)
+    # Call Claude with no tools (prevents file writes, forces JSON output)
     info "Calling Claude to generate PRD..." >&2
 
     local exit_code=0
-    timeout 300 claude --print --dangerously-skip-permissions < "$prompt_file" > "$output_file" 2>&1 || exit_code=$?
+    timeout 300 claude --print --tools "" < "$prompt_file" > "$output_file" 2>&1 || exit_code=$?
 
     if [[ $exit_code -eq 124 ]]; then
         error "Timeout generating PRD"
@@ -627,6 +487,7 @@ EOF
 
 # Export functions
 export -f setup_colors info success warn error banner
+export -f load_prompt get_prompts_dir
 export -f get_completed_tasks check_all_tasks_complete show_progress
 export -f get_file_state build_prompt monitor_activity
 export -f run_claude_iteration check_progress verify_with_claude

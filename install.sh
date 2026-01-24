@@ -102,6 +102,12 @@ install_ralph() {
     rm -rf "$INSTALL_DIR/lib/ralph"
     cp -r "$SCRIPT_DIR/lib" "$INSTALL_DIR/lib/ralph"
 
+    # Install prompts
+    info "Installing prompts..."
+    rm -rf "$INSTALL_DIR/prompts"
+    cp -r "$SCRIPT_DIR/prompts" "$INSTALL_DIR/prompts"
+    chmod 644 "$INSTALL_DIR/prompts"/*.md
+
     # Install completions
     if [[ -f "$SCRIPT_DIR/completions/ralph.bash" ]]; then
         info "Installing bash completions..."
@@ -138,6 +144,11 @@ uninstall_ralph() {
     if [[ -d "$LIB_DIR" ]]; then
         rm -rf "$LIB_DIR"
         success "Removed $LIB_DIR"
+    fi
+
+    if [[ -d "$INSTALL_DIR/prompts" ]]; then
+        rm -rf "$INSTALL_DIR/prompts"
+        success "Removed prompts"
     fi
 
     if [[ -f "$COMPLETIONS_DIR/ralph" ]]; then
