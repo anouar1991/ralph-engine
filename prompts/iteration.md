@@ -111,7 +111,7 @@ When ALL tasks have `pass: true`, output exactly:
 ```
 {{DIR_STRUCTURE}}
 ```
-
+{{SUDO_INSTRUCTIONS}}
 ## Start Now
 
 1. Read prd.json

@@ -146,6 +146,40 @@ get_file_state() {
         -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-
 }
 
+# Build sudo instructions if enabled
+build_sudo_instructions() {
+    local var_name="${SUDO_PASS_VAR:-}"
+
+    if [[ -z "$var_name" ]]; then
+        echo ""
+        return
+    fi
+
+    cat <<EOF
+
+## Sudo Password Configuration
+
+When commands require sudo/root privileges, pipe the password from the environment:
+
+\`\`\`bash
+# Pattern for sudo commands:
+echo "\$${var_name}" | sudo -S <command>
+
+# Examples:
+echo "\$${var_name}" | sudo -S apt-get install -y package-name
+echo "\$${var_name}" | sudo -S systemctl restart service-name
+echo "\$${var_name}" | sudo -S chmod 755 /path/to/file
+\`\`\`
+
+**Important:**
+- The password is available in the \`${var_name}\` environment variable
+- Always use \`sudo -S\` to read password from stdin
+- Never echo or log the password value directly
+- This enables fully automated execution of privileged commands
+
+EOF
+}
+
 # Build prompt for Claude
 build_prompt() {
     local iteration="$1"
@@ -165,13 +199,17 @@ build_prompt() {
         -not -path './node_modules/*' \
         -not -path './target/*' 2>/dev/null | head -20)
 
+    local sudo_instructions
+    sudo_instructions=$(build_sudo_instructions)
+
     # Use external template
     load_prompt "iteration" \
         "ITERATION=$iteration" \
         "GIT_LOG=$git_log" \
         "COMPLETED_TASKS=$completed_tasks" \
         "AGENTS_FILES=$agents_files" \
-        "DIR_STRUCTURE=$dir_structure"
+        "DIR_STRUCTURE=$dir_structure" \
+        "SUDO_INSTRUCTIONS=$sudo_instructions"
 }
 
 # Activity monitor (background process)
@@ -489,6 +527,6 @@ generate_prd() {
 export -f setup_colors info success warn error banner
 export -f load_prompt get_prompts_dir
 export -f get_completed_tasks check_all_tasks_complete show_progress
-export -f get_file_state build_prompt monitor_activity
+export -f get_file_state build_sudo_instructions build_prompt monitor_activity
 export -f run_claude_iteration check_progress verify_with_claude
 export -f show_completion run_loop generate_prd

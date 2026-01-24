@@ -34,6 +34,7 @@ PROJECT_DIR=""
 QUIET_MODE=false
 NO_VERIFY=false
 DRY_RUN=false
+SUDO_PASS_VAR=""
 
 # Init command configuration
 GOAL_TEXT=""
@@ -83,6 +84,7 @@ OPTIONS:
     -o, --output DIR            Output directory for logs (default: $DEFAULT_OUTPUT_DIR)
     -q, --quiet                 Minimal output
         --no-verify             Skip verification step after each iteration
+        --sudo-pass [VAR]       Enable sudo password piping from env var (default: RALPH_SUDO_PASS)
         --dry-run               Show what would be done without executing
     -h, --help                  Show this help message
 
@@ -90,6 +92,7 @@ ENVIRONMENT VARIABLES:
     RALPH_MAX_ITERATIONS    Override default max iterations
     RALPH_TIMEOUT           Override default timeout
     RALPH_OUTPUT_DIR        Override default output directory
+    RALPH_SUDO_PASS         Sudo password for privileged commands (with --sudo-pass)
     NO_COLOR                Disable colored output
 
 EXAMPLES:
@@ -97,6 +100,8 @@ EXAMPLES:
     ralph ~/my-project              # Run in specific directory
     ralph -n 100 -t 1800            # 100 iterations, 30min timeout each
     ralph --dry-run                 # Preview without executing
+    ralph --sudo-pass               # Enable sudo with RALPH_SUDO_PASS env var
+    RALPH_SUDO_PASS=secret ralph --sudo-pass  # Provide password inline
 
 EOF
 }
@@ -191,6 +196,16 @@ parse_run_args() {
             --no-verify)
                 NO_VERIFY=true
                 shift
+                ;;
+            --sudo-pass)
+                # Check if next arg is a custom var name (not another flag)
+                if [[ -n "${2:-}" ]] && [[ ! "$2" =~ ^- ]]; then
+                    SUDO_PASS_VAR="$2"
+                    shift 2
+                else
+                    SUDO_PASS_VAR="RALPH_SUDO_PASS"
+                    shift
+                fi
                 ;;
             --dry-run)
                 DRY_RUN=true
@@ -418,6 +433,7 @@ show_config() {
     echo "  Timeout:      ${ITERATION_TIMEOUT}s per iteration"
     echo "  Output:       $OUTPUT_DIR"
     echo "  Verify:       $([[ "$NO_VERIFY" == true ]] && echo "disabled" || echo "enabled")"
+    echo "  Sudo:         $([[ -n "$SUDO_PASS_VAR" ]] && echo "enabled (\$$SUDO_PASS_VAR)" || echo "disabled")"
     echo ""
 }
 
@@ -432,7 +448,17 @@ cmd_run() {
         echo "  PRD:        $PRD_FILE"
         echo "  Iterations: $MAX_ITERATIONS"
         echo "  Timeout:    ${ITERATION_TIMEOUT}s"
+        echo "  Sudo:       $([[ -n "$SUDO_PASS_VAR" ]] && echo "enabled (\$$SUDO_PASS_VAR)" || echo "disabled")"
         exit 0
+    fi
+
+    # Validate sudo password if enabled
+    if [[ -n "$SUDO_PASS_VAR" ]]; then
+        if [[ -z "${!SUDO_PASS_VAR:-}" ]]; then
+            warn "Sudo password enabled but \$$SUDO_PASS_VAR is not set"
+        fi
+        # Export for use in core functions
+        export SUDO_PASS_VAR
     fi
 
     validate_env
