@@ -585,8 +585,8 @@ Return ONLY the JSON object. No markdown code blocks, no explanation, just valid
 Start with { and end with }
 EOF
 
-    # Call Claude
-    info "Calling Claude to generate PRD..."
+    # Call Claude (info to stderr so it doesn't pollute stdout)
+    info "Calling Claude to generate PRD..." >&2
 
     local exit_code=0
     timeout 300 claude --print --dangerously-skip-permissions < "$prompt_file" > "$output_file" 2>&1 || exit_code=$?
