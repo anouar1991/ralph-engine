@@ -94,13 +94,12 @@ install_ralph() {
     # Update RALPH_ROOT in installed binary
     sed -i "s|RALPH_ROOT=\"\$(cd \"\$(dirname \"\${BASH_SOURCE\[0\]}\")/..\"|RALPH_ROOT=\"$INSTALL_DIR/lib/ralph/../..\"|" "$BIN_DIR/ralph" 2>/dev/null || true
 
-    # Actually, let's use a simpler approach - set RALPH_ROOT explicitly
+    # Set RALPH_ROOT to the installation directory
     sed -i "s|^RALPH_ROOT=.*|RALPH_ROOT=\"$INSTALL_DIR\"|" "$BIN_DIR/ralph"
 
-    # Ensure lib is in the right place
+    # Copy library directly to lib/ (not lib/ralph/) to match source path
     mkdir -p "$INSTALL_DIR/lib"
-    rm -rf "$INSTALL_DIR/lib/ralph"
-    cp -r "$SCRIPT_DIR/lib" "$INSTALL_DIR/lib/ralph"
+    cp "$SCRIPT_DIR/lib/ralph-core.sh" "$INSTALL_DIR/lib/"
 
     # Install prompts
     info "Installing prompts..."
