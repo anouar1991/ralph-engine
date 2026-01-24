@@ -76,12 +76,12 @@ load_prompt() {
     content=$(cat "$prompt_file")
 
     # Substitute variables passed as arguments (VAR=value format)
+    # Use bash parameter expansion instead of sed to handle special chars
     for arg in "$@"; do
         local var_name="${arg%%=*}"
         local var_value="${arg#*=}"
-        # Escape special characters in value for sed
-        var_value=$(printf '%s\n' "$var_value" | sed 's/[&/\]/\\&/g')
-        content=$(echo "$content" | sed "s|{{${var_name}}}|${var_value}|g")
+        # Use bash string replacement (handles special chars safely)
+        content="${content//\{\{${var_name}\}\}/${var_value}}"
     done
 
     echo "$content"
