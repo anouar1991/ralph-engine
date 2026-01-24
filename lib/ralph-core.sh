@@ -961,7 +961,7 @@ generate_prd() {
     if [[ -n "$target_complexity" ]]; then
         complexity_hint="Target approximately $target_complexity tasks."
     else
-        complexity_hint="Choose an appropriate number of tasks based on project scope (typically 10-50)."
+        complexity_hint="Create as many tasks as needed to make each one atomic and achievable in a single focused iteration. Break down complex goals until every task is clear, testable, and completable without requiring further decomposition. Prefer more granular tasks over fewer complex ones."
     fi
 
     # Create the prompt using external template
