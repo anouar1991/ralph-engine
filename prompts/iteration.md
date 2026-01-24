@@ -56,19 +56,30 @@ git commit -m "Complete T-XXX: Task Name
 - Guarantees verified: [list what was validated]"
 ```
 
-## Contract System
+## The Relay Race: Baton Passing
 
-The PRD uses a contract system to ensure correctness:
+**You are a runner in a relay race. Each task passes a working baton to the next.**
 
 ```
-Task A (dependency)          Task B (dependent)
-├── guarantees: ──────────► ├── requires:
-│   "X exists"              │   "X exists"  ✓ satisfied
-│   "Y works"               │   "Y works"   ✓ satisfied
+T-300 (Your predecessor)         YOU (T-400)              T-500 (Next runner)
+├── guarantees: ─────────────► ├── requires:     ├── requires:
+│   "add(2,3)=5" ✓ PROVEN     │   "add works"   │   "all ops verified"
+│                              │                  │
+│                              ├── guarantees: ──►│
+│                              │   "all 4 ops     │
+│                              │    demo'd"       │
 ```
 
-**Before starting a task**: Verify all `requires` are satisfied
-**After completing a task**: Verify all `guarantees` are true
+**The Rules:**
+1. **Receive the baton**: Verify your `requires` are proven (run the predecessor's validation)
+2. **Run your leg**: Implement and DEMONSTRATE your deliverable works
+3. **Pass the baton**: Your `guarantees` must be PROVEN so the next runner can proceed
+
+**DEMONSTRATE, Don't Just Test:**
+- ❌ "Tests pass" (silent, invisible)
+- ✅ "Demo: add(2,3) outputs 5, subtract(5,2) outputs 3" (visible proof)
+
+**Every validation should SHOW output the user could see.**
 
 ## AGENTS.md Format
 

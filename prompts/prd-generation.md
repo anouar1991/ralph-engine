@@ -1,6 +1,6 @@
-# Generate Task Dependency Graph for Ralph Engine
+# Generate Deliverable Goals for Ralph Engine
 
-You are generating a task dependency graph by **reasoning backwards from a goal**.
+You are generating a **relay race of deliverable goals** by reasoning backwards from the final outcome.
 
 ## Goal
 
@@ -10,38 +10,67 @@ You are generating a task dependency graph by **reasoning backwards from a goal*
 
 {{COMPLEXITY_HINT}}
 
+## Core Philosophy: The Relay Race Pattern
+
+**Every task is a runner in a relay race:**
+
+1. **Each runner must receive a working baton** - A task can only start when its predecessor has proven their piece works
+2. **Each runner must prove they ran their leg** - A task must demonstrate its deliverable works before passing the baton
+3. **The final runner crosses the finish line** - The last task delivers something the user can actually USE
+
+**This means:**
+- Tasks are NOT "implement X" - they are "deliver working X and prove it"
+- Each task's validation DEMONSTRATES the deliverable (not just runs tests silently)
+- The final task gives the user something interactive/usable
+
 ## Process: Backward Goal Decomposition
 
-**Think backwards from the goal to discover dependencies:**
+**Think backwards from what the user will SEE and USE:**
 
-1. **Start with the Goal**: What is the final deliverable? Create a task node for it.
+1. **Start with the User Experience**: What will the user actually DO with the final product? Create the goal task that delivers this.
 
-2. **Ask "What must be true before this can start?"**: For each task, identify its preconditions (requires). Each precondition that isn't trivially true becomes a dependency task.
+2. **What must work before the user can use it?**: Decompose into sub-deliverables, each provably working.
 
-3. **Recursively Decompose**: Continue asking "what must be true?" for each new task until you reach **base tasks** - tasks with no dependencies that can start immediately.
+3. **Each Deliverable Proves Itself**: Every task must have a visible validation - something that shows it works, not just "test passes".
 
-4. **Define Contracts**: For each task, specify:
-   - `requires`: What must be true BEFORE this task can begin (preconditions)
-   - `guarantees`: What will be true AFTER this task completes (postconditions)
-   - The guarantees of dependency tasks should satisfy the requires of dependent tasks
+4. **Continue Until Base**: Keep asking "what must be working before this?" until you reach tasks that can start immediately.
 
-5. **Identify Starting Point**: Find the task with no dependencies and lowest complexity - this is the `recommendedNextStepId`.
-
-## Example Reasoning (for "Build a REST API")
+## Example: Calculator (Relay Race Pattern)
 
 ```
-Goal: "Working REST API with tests" (T-500)
-  └── requires: API endpoints exist, tests exist
-      ├── "Write API tests" (T-400)
-      │   └── requires: endpoints to test exist
-      │       └── "Implement API endpoints" (T-300)
-      │           └── requires: data models exist, framework setup
-      │               ├── "Create data models" (T-200)
-      │               │   └── requires: project structure exists
-      │               └── "Setup framework" (T-110)
-      │                   └── requires: project structure exists
-      └── "Project structure" (T-100) ← BASE TASK (no requires)
+🏁 FINISH LINE: "User can perform calculations" (T-600)
+   └── requires: All operations work, CLI/REPL available
+       └── proves: Interactive session with user doing real calculations
+
+🏃 LEG 5: "Interactive calculator REPL" (T-500)
+   └── requires: All 4 operations verified working
+   └── proves: Demo session showing actual user input/output
+
+🏃 LEG 4: "All operations verified" (T-400)
+   └── requires: add, subtract, multiply, divide all work
+   └── proves: Test run output showing all operations with results
+
+🏃 LEG 3: "Division with error handling" (T-330)
+   └── requires: module importable, multiply works
+   └── proves: Demo of 10/2=5.0, 7/2=3.5, 5/0→error message
+
+🏃 LEG 2b: "Multiplication works" (T-320)
+   └── requires: module importable
+   └── proves: Demo of 4*3=12, 2.5*4=10.0
+
+🏃 LEG 2a: "Subtraction works" (T-310)
+   └── requires: module importable
+   └── proves: Demo of 5-3=2, 1.5-0.5=1.0
+
+🏃 LEG 1: "Addition works" (T-300)
+   └── requires: module importable
+   └── proves: Demo of 2+3=5, 1.5+2.5=4.0
+
+🏁 START: "Calculator module exists" (T-100) ← BASE TASK
+   └── proves: python -c "import calculator" succeeds
 ```
+
+**Key insight**: Each task PROVES its deliverable works before the next can start.
 
 ## Output JSON Format
 
@@ -49,20 +78,20 @@ Goal: "Working REST API with tests" (T-500)
 {
   "name": "Project Name",
   "description": "Brief project description",
-  "goal": "The main goal/deliverable",
+  "goal": "What the USER will be able to DO (not what code does)",
   "tasks": [
     {
       "id": "T-100",
-      "name": "Task name",
-      "intent": "Why this task exists (what goal it serves)",
-      "description": "Detailed description",
+      "name": "Deliverable name (what's proven working)",
+      "intent": "Why this deliverable matters to the final goal",
+      "description": "What this task delivers and how it proves itself",
       "pass": false,
       "dependencies": [],
       "complexity": 1,
-      "requires": ["Precondition 1", "Precondition 2"],
-      "guarantees": ["Postcondition 1", "Postcondition 2"],
-      "validation": "How to verify guarantees are met",
-      "actions": ["Step 1", "Step 2"]
+      "requires": ["What must be working before this starts"],
+      "guarantees": ["What will be proven working after this completes"],
+      "validation": "DEMONSTRATION command/output that PROVES it works",
+      "actions": ["Implementation steps"]
     }
   ],
   "ralph": {
@@ -76,46 +105,76 @@ Goal: "Working REST API with tests" (T-500)
 
 ## Task Design Rules
 
-1. **IDs**: Use T-100, T-110, T-120... (increment by 10 for gaps)
-2. **Dependencies**: List task IDs whose `guarantees` satisfy this task's `requires`
-3. **Complexity**: Rate 1-5 (1=trivial, 5=complex)
-4. **Base Tasks**: Have empty `dependencies` and minimal `requires`
-5. **Goal Task**: Has highest ID, most dependencies, represents final deliverable
-6. **Contract Consistency**: A task's `requires` must be covered by its dependencies' `guarantees`
-7. **Granularity**: Each task should be completable in 15-30 minutes
+### Naming: Deliverables, Not Actions
+- ❌ "Implement add function"
+- ✅ "Addition works: add(a,b) returns correct sums"
 
-## Task Categories (IDs reflect dependency order, not sequence)
+- ❌ "Write tests for calculator"
+- ✅ "All operations verified: test suite proves each operation works"
 
-- **T-100s**: Base/Foundation tasks (no dependencies)
-- **T-200s**: Core building blocks
-- **T-300s**: Feature implementation
-- **T-400s**: Integration tasks
-- **T-500s**: Goal tasks (final deliverables)
-- **T-600s**: Verification/Polish (depend on goal tasks)
+- ❌ "Create CLI interface"
+- ✅ "Interactive calculator: user can perform calculations via REPL"
 
-## Contract Examples
+### Validation: Demonstration, Not Silent Tests
+- ❌ `"validation": "pytest test_add.py"`
+- ✅ `"validation": "python -c 'from calc import add; print(add(2,3))' outputs 5"`
 
-**Base Task (no requires):**
+- ❌ `"validation": "Run test suite"`
+- ✅ `"validation": "Demo: 2+3=5, 10-4=6, 3*4=12, 8/2=4.0, 5/0→'Error: division by zero'"`
+
+### Guarantees: Observable Outcomes
+- ❌ `"guarantees": ["Function is implemented"]`
+- ✅ `"guarantees": ["add(2,3) returns 5", "add(1.5, 2.5) returns 4.0"]`
+
+- ❌ `"guarantees": ["Tests pass"]`
+- ✅ `"guarantees": ["Demo output shows all 4 operations with correct results"]`
+
+### Final Task: User-Facing Deliverable
+The highest-numbered task should deliver something the USER interacts with:
+- A CLI they can run
+- A REPL they can type into
+- A web page they can open
+- An API they can call
+- A script they can execute
+
+Example:
 ```json
 {
-  "id": "T-100",
-  "name": "Create project structure",
-  "requires": [],
-  "guarantees": ["Project directory exists", "Main file is valid Python"],
-  "dependencies": []
+  "id": "T-600",
+  "name": "Working calculator: user can perform calculations",
+  "intent": "Deliver the final usable product to the user",
+  "validation": "Interactive demo: start REPL, user enters '2+3', sees '5', enters '10/0', sees error message",
+  "guarantees": [
+    "User can start calculator with 'python -m calculator'",
+    "User can enter expressions and see results",
+    "Invalid operations show helpful error messages"
+  ]
 }
 ```
 
-**Dependent Task:**
-```json
-{
-  "id": "T-200",
-  "name": "Implement add function",
-  "requires": ["Main module exists and is importable"],
-  "guarantees": ["add(a,b) returns sum", "Function handles int and float"],
-  "dependencies": ["T-100"]
-}
+## The Baton: Contracts That Enable Progress
+
+**A task's guarantees ARE the baton it passes:**
+
 ```
+T-300 (Addition)                    T-400 (Verification)
+├── guarantees: ─────────────────► ├── requires:
+│   "add(2,3) returns 5"          │   "Addition operation works"
+│   "add(1.5,2.5) returns 4.0"    │
+```
+
+**The contract must be PROVEN, not assumed:**
+- T-300's validation DEMONSTRATES add works
+- Only then can T-400 trust the baton and proceed
+
+## Task Categories (by dependency depth)
+
+- **T-100s**: Starting line - foundation tasks (no dependencies)
+- **T-200s**: Infrastructure - setup and configuration
+- **T-300s**: Core deliverables - main functionality proven working
+- **T-400s**: Integration - multiple pieces working together
+- **T-500s**: User-facing - interface/interaction layer
+- **T-600s**: Finish line - final deliverable user can USE
 
 ## Critical Instructions
 
@@ -126,5 +185,7 @@ Goal: "Working REST API with tests" (T-500)
 5. Start your response with `{` and end with `}`
 6. The JSON must be valid and parseable
 7. `recommendedNextStepId` must be a base task (no dependencies)
+8. Final task MUST deliver something the user can USE/interact with
+9. Every validation must DEMONSTRATE (show output), not just test silently
 
 Your ENTIRE response must be the JSON object and nothing else.
