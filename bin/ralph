@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # Version
-readonly RALPH_VERSION="1.0.0"
+readonly RALPH_VERSION="1.1.0"
 
 # Determine script location for library loading
 RALPH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,13 +35,43 @@ QUIET_MODE=false
 NO_VERIFY=false
 DRY_RUN=false
 
-# Usage/help
+# Init command configuration
+GOAL_TEXT=""
+GOAL_FILE=""
+INIT_OUTPUT_DIR=""
+
+# Main usage/help
 usage() {
     cat <<EOF
 ralph - Autonomous task executor for Claude Code
 
 USAGE:
-    ralph [OPTIONS] [PROJECT_DIR]
+    ralph [OPTIONS] [PROJECT_DIR]        Run the task loop
+    ralph init [OPTIONS] <GOAL>          Generate prd.json from a goal
+    ralph status [PROJECT_DIR]           Show project status
+
+COMMANDS:
+    run (default)    Execute the Ralph loop on a project
+    init             Generate a prd.json from a goal description
+    status           Show current project progress
+
+Run 'ralph <command> --help' for command-specific help.
+
+QUICK START:
+    ralph init "Build a CLI tool for managing todos"
+    ralph
+
+For more information, see: https://github.com/anouar1991/ralph-engine
+
+EOF
+}
+
+usage_run() {
+    cat <<EOF
+ralph run - Execute the Ralph loop
+
+USAGE:
+    ralph [run] [OPTIONS] [PROJECT_DIR]
 
 ARGUMENTS:
     PROJECT_DIR    Directory containing prd.json (default: current directory)
@@ -55,7 +85,6 @@ OPTIONS:
         --no-verify             Skip verification step after each iteration
         --dry-run               Show what would be done without executing
     -h, --help                  Show this help message
-    -v, --version               Show version
 
 ENVIRONMENT VARIABLES:
     RALPH_MAX_ITERATIONS    Override default max iterations
@@ -69,21 +98,57 @@ EXAMPLES:
     ralph -n 100 -t 1800            # 100 iterations, 30min timeout each
     ralph --dry-run                 # Preview without executing
 
-PRD FILE FORMAT:
-    The prd.json file should contain:
-    {
-        "tasks": [
-            {
-                "id": "T-100",
-                "name": "Task name",
-                "pass": false,
-                "dependencies": [],
-                ...
-            }
-        ]
-    }
+EOF
+}
 
-For more information, see: https://github.com/anthropics/claude-code
+usage_init() {
+    cat <<EOF
+ralph init - Generate prd.json from a goal description
+
+USAGE:
+    ralph init [OPTIONS] <GOAL>
+    ralph init [OPTIONS] -f <FILE>
+
+ARGUMENTS:
+    GOAL    Goal description as text (quote multi-word goals)
+
+OPTIONS:
+    -f, --file FILE       Read goal from file instead of argument
+    -d, --dir DIR         Output directory for prd.json (default: current directory)
+    -p, --prd FILE        Output PRD file name (default: $DEFAULT_PRD_FILE)
+        --complexity NUM  Target number of tasks (default: auto)
+        --dry-run         Show generated PRD without writing
+    -h, --help            Show this help message
+
+EXAMPLES:
+    ralph init "Build a REST API for user management"
+    ralph init -f requirements.txt -d ~/my-project
+    ralph init "Create a CLI todo app" --complexity 20
+    ralph init -f goal.md --dry-run
+
+GOAL FILE FORMAT:
+    The goal file can be plain text or markdown describing:
+    - What the project should do
+    - Key features and requirements
+    - Technical constraints (language, framework, etc.)
+    - Any specific considerations
+
+EOF
+}
+
+usage_status() {
+    cat <<EOF
+ralph status - Show project progress
+
+USAGE:
+    ralph status [PROJECT_DIR]
+
+ARGUMENTS:
+    PROJECT_DIR    Directory containing prd.json (default: current directory)
+
+OPTIONS:
+    -p, --prd FILE    PRD file name (default: $DEFAULT_PRD_FILE)
+    -h, --help        Show this help message
 
 EOF
 }
@@ -92,8 +157,8 @@ version() {
     echo "ralph $RALPH_VERSION"
 }
 
-# Parse command line arguments
-parse_args() {
+# Parse run command arguments
+parse_run_args() {
     # Apply environment variable defaults
     MAX_ITERATIONS="${RALPH_MAX_ITERATIONS:-$DEFAULT_MAX_ITERATIONS}"
     ITERATION_TIMEOUT="${RALPH_TIMEOUT:-$DEFAULT_TIMEOUT}"
@@ -132,7 +197,7 @@ parse_args() {
                 shift
                 ;;
             -h|--help)
-                usage
+                usage_run
                 exit 0
                 ;;
             -v|--version)
@@ -141,7 +206,7 @@ parse_args() {
                 ;;
             -*)
                 error "Unknown option: $1"
-                echo "Use 'ralph --help' for usage information."
+                echo "Use 'ralph run --help' for usage information."
                 exit 1
                 ;;
             *)
@@ -171,7 +236,113 @@ parse_args() {
     PRD_FILE="$PROJECT_DIR/$PRD_FILE"
 }
 
-# Validate environment
+# Parse init command arguments
+parse_init_args() {
+    INIT_OUTPUT_DIR="."
+    PRD_FILE="$DEFAULT_PRD_FILE"
+    local complexity=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f|--file)
+                GOAL_FILE="$2"
+                shift 2
+                ;;
+            -d|--dir)
+                INIT_OUTPUT_DIR="$2"
+                shift 2
+                ;;
+            -p|--prd)
+                PRD_FILE="$2"
+                shift 2
+                ;;
+            --complexity)
+                complexity="$2"
+                shift 2
+                ;;
+            --dry-run)
+                DRY_RUN=true
+                shift
+                ;;
+            -h|--help)
+                usage_init
+                exit 0
+                ;;
+            -*)
+                error "Unknown option: $1"
+                echo "Use 'ralph init --help' for usage information."
+                exit 1
+                ;;
+            *)
+                GOAL_TEXT="$1"
+                shift
+                ;;
+        esac
+    done
+
+    # Validate we have a goal
+    if [[ -z "$GOAL_TEXT" ]] && [[ -z "$GOAL_FILE" ]]; then
+        error "No goal specified. Provide a goal as argument or use -f FILE."
+        echo ""
+        usage_init
+        exit 1
+    fi
+
+    # Read goal from file if specified
+    if [[ -n "$GOAL_FILE" ]]; then
+        if [[ ! -f "$GOAL_FILE" ]]; then
+            error "Goal file not found: $GOAL_FILE"
+            exit 1
+        fi
+        GOAL_TEXT=$(cat "$GOAL_FILE")
+    fi
+
+    # Create output directory if needed
+    if [[ ! -d "$INIT_OUTPUT_DIR" ]]; then
+        mkdir -p "$INIT_OUTPUT_DIR"
+    fi
+    INIT_OUTPUT_DIR="$(cd "$INIT_OUTPUT_DIR" && pwd)"
+
+    # Store complexity if specified
+    if [[ -n "$complexity" ]]; then
+        export RALPH_TARGET_COMPLEXITY="$complexity"
+    fi
+}
+
+# Parse status command arguments
+parse_status_args() {
+    PRD_FILE="$DEFAULT_PRD_FILE"
+    PROJECT_DIR="."
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--prd)
+                PRD_FILE="$2"
+                shift 2
+                ;;
+            -h|--help)
+                usage_status
+                exit 0
+                ;;
+            -*)
+                error "Unknown option: $1"
+                exit 1
+                ;;
+            *)
+                PROJECT_DIR="$1"
+                shift
+                ;;
+        esac
+    done
+
+    PROJECT_DIR="$(cd "$PROJECT_DIR" 2>/dev/null && pwd)" || {
+        error "Project directory not found: $PROJECT_DIR"
+        exit 1
+    }
+    PRD_FILE="$PROJECT_DIR/$PRD_FILE"
+}
+
+# Validate environment for run command
 validate_env() {
     # Check for claude CLI
     if ! command -v claude &>/dev/null; then
@@ -196,6 +367,8 @@ validate_env() {
     # Check PRD file exists
     if [[ ! -f "$PRD_FILE" ]]; then
         error "PRD file not found: $PRD_FILE"
+        echo ""
+        echo "Create one with: ralph init \"Your project goal\""
         exit 1
     fi
 
@@ -248,12 +421,9 @@ show_config() {
     echo ""
 }
 
-# Main entry point
-main() {
-    parse_args "$@"
-
-    # Setup colors (respects NO_COLOR)
-    setup_colors
+# Run command
+cmd_run() {
+    parse_run_args "$@"
 
     # Dry run mode
     if [[ "$DRY_RUN" == true ]]; then
@@ -278,6 +448,201 @@ main() {
 
     # Run the main loop
     run_loop
+}
+
+# Init command
+cmd_init() {
+    parse_init_args "$@"
+
+    # Check for claude
+    if ! command -v claude &>/dev/null; then
+        error "claude CLI not found in PATH"
+        echo "Install Claude Code: https://claude.ai/code"
+        exit 1
+    fi
+
+    local prd_path="$INIT_OUTPUT_DIR/$PRD_FILE"
+
+    # Check if PRD already exists
+    if [[ -f "$prd_path" ]] && [[ "$DRY_RUN" != true ]]; then
+        warn "PRD file already exists: $prd_path"
+        read -r -p "Overwrite? [y/N] " response
+        if [[ ! "$response" =~ ^[Yy]$ ]]; then
+            info "Aborted."
+            exit 0
+        fi
+    fi
+
+    banner "RALPH ENGINE v$RALPH_VERSION"
+    echo ""
+    info "Generating PRD from goal..."
+    echo ""
+    echo -e "${CYAN}Goal:${NC}"
+    echo "$GOAL_TEXT" | head -20
+    if [[ $(echo "$GOAL_TEXT" | wc -l) -gt 20 ]]; then
+        echo "  ... (truncated)"
+    fi
+    echo ""
+
+    # Generate PRD
+    local prd_content
+    prd_content=$(generate_prd "$GOAL_TEXT")
+
+    if [[ -z "$prd_content" ]]; then
+        error "Failed to generate PRD"
+        exit 1
+    fi
+
+    # Validate generated JSON
+    if ! echo "$prd_content" | jq empty 2>/dev/null; then
+        error "Generated PRD is not valid JSON"
+        echo ""
+        echo "Raw output:"
+        echo "$prd_content" | head -50
+        exit 1
+    fi
+
+    # Dry run - just show the PRD
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY RUN] Generated PRD:"
+        echo ""
+        echo "$prd_content" | jq .
+        exit 0
+    fi
+
+    # Write PRD
+    echo "$prd_content" | jq . > "$prd_path"
+
+    local task_count
+    task_count=$(echo "$prd_content" | jq '.tasks | length')
+
+    echo ""
+    success "PRD generated: $prd_path"
+    info "Tasks: $task_count"
+    echo ""
+    echo "Next steps:"
+    echo "  1. Review the PRD: cat $prd_path | jq ."
+    echo "  2. Run Ralph:      ralph $INIT_OUTPUT_DIR"
+    echo ""
+}
+
+# Status command
+cmd_status() {
+    parse_status_args "$@"
+
+    if [[ ! -f "$PRD_FILE" ]]; then
+        error "PRD file not found: $PRD_FILE"
+        exit 1
+    fi
+
+    banner "RALPH ENGINE v$RALPH_VERSION"
+    echo ""
+
+    local project_name
+    project_name=$(jq -r '.name // "Unnamed Project"' "$PRD_FILE")
+    info "Project: $project_name"
+    echo "  Directory: $PROJECT_DIR"
+    echo "  PRD File:  $PRD_FILE"
+    echo ""
+
+    # Show progress
+    local total completed pending
+    total=$(jq '.tasks | length' "$PRD_FILE")
+    completed=$(jq '[.tasks[] | select(.pass == true)] | length' "$PRD_FILE")
+    pending=$((total - completed))
+
+    local pct=0
+    if [[ "$total" -gt 0 ]]; then
+        pct=$((completed * 100 / total))
+    fi
+
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${GREEN}Progress: $completed/$total tasks ($pct%)${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+
+    # Show completed tasks
+    if [[ "$completed" -gt 0 ]]; then
+        echo -e "${GREEN}Completed Tasks:${NC}"
+        jq -r '.tasks[] | select(.pass == true) | "  ✓ \(.id): \(.name)"' "$PRD_FILE"
+        echo ""
+    fi
+
+    # Show pending tasks
+    if [[ "$pending" -gt 0 ]]; then
+        echo -e "${YELLOW}Pending Tasks:${NC}"
+        jq -r '.tasks[] | select(.pass != true) | "  ○ \(.id): \(.name)"' "$PRD_FILE"
+        echo ""
+    fi
+
+    # Show next available task
+    echo -e "${CYAN}Next Available Task:${NC}"
+    local next_task
+    next_task=$(jq -r '
+        .tasks as $all |
+        [.tasks[] | select(.pass != true)] |
+        map(select(
+            .dependencies as $deps |
+            ($deps == null or $deps == [] or
+             ([$deps[] | . as $d | $all[] | select(.id == $d and .pass == true)] | length) == ($deps | length))
+        )) |
+        sort_by(.complexity // 5) |
+        first |
+        if . then "  \(.id): \(.name)" else "  (none available - check dependencies)" end
+    ' "$PRD_FILE")
+    echo "$next_task"
+    echo ""
+}
+
+# Main entry point
+main() {
+    # Setup colors early (respects NO_COLOR)
+    setup_colors
+
+    # No arguments - show usage
+    if [[ $# -eq 0 ]]; then
+        # Check if prd.json exists in current directory
+        if [[ -f "prd.json" ]]; then
+            # Run with defaults
+            cmd_run
+        else
+            usage
+            exit 0
+        fi
+        return
+    fi
+
+    # Parse subcommand
+    case "$1" in
+        init)
+            shift
+            cmd_init "$@"
+            ;;
+        run)
+            shift
+            cmd_run "$@"
+            ;;
+        status)
+            shift
+            cmd_status "$@"
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -v|--version)
+            version
+            exit 0
+            ;;
+        -*)
+            # Options without subcommand = run
+            cmd_run "$@"
+            ;;
+        *)
+            # Directory argument = run
+            cmd_run "$@"
+            ;;
+    esac
 }
 
 main "$@"

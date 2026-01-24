@@ -505,9 +505,129 @@ run_loop() {
     exit 1
 }
 
+# Generate PRD from goal description
+generate_prd() {
+    local goal="$1"
+    local target_complexity="${RALPH_TARGET_COMPLEXITY:-}"
+    local prompt_file="/tmp/ralph-init-prompt.md"
+    local output_file="/tmp/ralph-init-output.txt"
+
+    # Build complexity guidance
+    local complexity_hint=""
+    if [[ -n "$target_complexity" ]]; then
+        complexity_hint="Target approximately $target_complexity tasks."
+    else
+        complexity_hint="Choose an appropriate number of tasks based on project scope (typically 10-50)."
+    fi
+
+    # Create the prompt
+    cat > "$prompt_file" <<EOF
+# Generate PRD for Ralph Engine
+
+You are a technical product manager creating a PRD (Product Requirements Document) for an autonomous AI coding agent.
+
+## Goal
+
+$goal
+
+## Requirements
+
+$complexity_hint
+
+Create a prd.json file with this EXACT structure:
+
+\`\`\`json
+{
+  "name": "Project Name",
+  "description": "Brief project description",
+  "tasks": [
+    {
+      "id": "T-100",
+      "name": "Task name",
+      "description": "Detailed task description",
+      "pass": false,
+      "dependencies": [],
+      "complexity": 1,
+      "actions": ["Step 1", "Step 2"],
+      "guarantees": ["What must be true when done"],
+      "validation": "How to verify completion"
+    }
+  ],
+  "ralph": {
+    "currentTaskId": null,
+    "history": [],
+    "startedAt": null
+  }
+}
+\`\`\`
+
+## Task Design Rules
+
+1. **IDs**: Use T-100, T-110, T-120... (increment by 10 for flexibility)
+2. **Dependencies**: List task IDs that must complete first (e.g., ["T-100", "T-110"])
+3. **Complexity**: Rate 1-5 (1=trivial, 3=medium, 5=complex)
+4. **Order**: Start with setup/foundation, end with integration/polish
+5. **Granularity**: Each task should be completable in one iteration (15-30 min)
+6. **Validation**: Include concrete ways to verify completion
+
+## Task Categories (in order)
+
+1. **Setup** (T-100s): Project structure, dependencies, configuration
+2. **Core** (T-200s): Main functionality, core features
+3. **Features** (T-300s): Additional features, enhancements
+4. **Integration** (T-400s): Connect components, API endpoints
+5. **Polish** (T-500s): Error handling, edge cases, cleanup
+6. **Testing** (T-600s): Tests, validation, documentation
+
+## Output
+
+Return ONLY the JSON object. No markdown code blocks, no explanation, just valid JSON.
+Start with { and end with }
+EOF
+
+    # Call Claude
+    info "Calling Claude to generate PRD..."
+
+    local exit_code=0
+    timeout 300 claude --print --dangerously-skip-permissions < "$prompt_file" > "$output_file" 2>&1 || exit_code=$?
+
+    if [[ $exit_code -eq 124 ]]; then
+        error "Timeout generating PRD"
+        return 1
+    fi
+
+    # Extract JSON from output (handle potential wrapper text)
+    local content
+    content=$(cat "$output_file")
+
+    # Try to extract JSON if it's wrapped in markdown or other text
+    if [[ "$content" == *"{"* ]]; then
+        # Find the first { and last }
+        content=$(echo "$content" | sed -n '/^{/,/^}/p' | head -1)
+
+        # If that didn't work, try a more aggressive extraction
+        if [[ -z "$content" ]] || ! echo "$content" | jq empty 2>/dev/null; then
+            content=$(cat "$output_file" | grep -Pzo '(?s)\{.*\}' | tr '\0' '\n' | head -1)
+        fi
+
+        # Still not valid? Try to find JSON between code blocks
+        if [[ -z "$content" ]] || ! echo "$content" | jq empty 2>/dev/null; then
+            content=$(cat "$output_file" | sed -n '/```json/,/```/p' | sed '1d;$d')
+        fi
+
+        # Last resort: just take everything between first { and last }
+        if [[ -z "$content" ]] || ! echo "$content" | jq empty 2>/dev/null; then
+            content=$(cat "$output_file" | tr '\n' ' ' | grep -oP '\{.*\}')
+        fi
+    fi
+
+    # Output the content
+    echo "$content"
+}
+
 # Export functions
 export -f setup_colors info success warn error banner
 export -f get_completed_tasks check_all_tasks_complete show_progress
 export -f get_file_state build_prompt monitor_activity
 export -f run_claude_iteration check_progress verify_with_claude
-export -f show_completion run_loop
+export -f show_completion run_loop generate_prd
