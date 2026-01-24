@@ -10,13 +10,13 @@ _ralph_completions() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     # Commands
-    commands="init run status stack watch"
+    commands="init run status stack watch flow"
 
     # Determine if we're completing a command or option
     local cmd=""
     for ((i=1; i < COMP_CWORD; i++)); do
         case "${COMP_WORDS[i]}" in
-            init|run|status|stack|watch)
+            init|run|status|stack|watch|flow)
                 cmd="${COMP_WORDS[i]}"
                 break
                 ;;
@@ -117,6 +117,24 @@ _ralph_completions() {
             return 0
             ;;
         watch)
+            case "${prev}" in
+                -p|--prd)
+                    COMPREPLY=($(compgen -f -X '!*.json' -- "${cur}"))
+                    return 0
+                    ;;
+                -r|--refresh)
+                    COMPREPLY=($(compgen -W "1 2 3 5 10" -- "${cur}"))
+                    return 0
+                    ;;
+            esac
+            if [[ "${cur}" == -* ]]; then
+                COMPREPLY=($(compgen -W "-p --prd -r --refresh -h --help" -- "${cur}"))
+            else
+                COMPREPLY=($(compgen -d -- "${cur}"))
+            fi
+            return 0
+            ;;
+        flow)
             case "${prev}" in
                 -p|--prd)
                     COMPREPLY=($(compgen -f -X '!*.json' -- "${cur}"))

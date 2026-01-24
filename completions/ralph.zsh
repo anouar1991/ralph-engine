@@ -13,6 +13,7 @@ _ralph() {
         'status:Show current project progress'
         'stack:Show PRD expansion stack status'
         'watch:Real-time task visualization dashboard'
+        'flow:Dependency tree visualization'
     )
 
     local -a global_opts
@@ -72,6 +73,13 @@ _ralph() {
                         '*:project directory:_files -/'
                     ;;
                 watch)
+                    _arguments \
+                        '(-p --prd)'{-p,--prd}'[PRD filename]:file:_files -g "*.json"' \
+                        '(-r --refresh)'{-r,--refresh}'[Refresh interval]:seconds:(1 2 3 5 10)' \
+                        '(-h --help)'{-h,--help}'[Show help]' \
+                        '*:project directory:_files -/'
+                    ;;
+                flow)
                     _arguments \
                         '(-p --prd)'{-p,--prd}'[PRD filename]:file:_files -g "*.json"' \
                         '(-r --refresh)'{-r,--refresh}'[Refresh interval]:seconds:(1 2 3 5 10)' \

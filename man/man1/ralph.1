@@ -6,10 +6,10 @@
 ralph \- autonomous task executor for Claude Code
 .SH SYNOPSIS
 .B ralph
-[\fIOPTIONS\fR] [\fIPROJECT_DIR\fR]
+[\fIOPTIONS\fR] [\fIPROJECT_DIR\fR] [\fB\-\-\fR \fICLAUDE_ARGS\fR]
 .br
 .B ralph init
-[\fIOPTIONS\fR] \fIGOAL\fR
+[\fIOPTIONS\fR] \fIGOAL\fR [\fB\-\-\fR \fICLAUDE_ARGS\fR]
 .br
 .B ralph status
 [\fIPROJECT_DIR\fR]
@@ -18,6 +18,9 @@ ralph \- autonomous task executor for Claude Code
 [\fIPROJECT_DIR\fR]
 .br
 .B ralph watch
+[\fIOPTIONS\fR] [\fIPROJECT_DIR\fR]
+.br
+.B ralph flow
 [\fIOPTIONS\fR] [\fIPROJECT_DIR\fR]
 .SH DESCRIPTION
 .B ralph
@@ -40,6 +43,9 @@ Show the PRD expansion stack status when working with sub-PRDs.
 .TP
 .B watch
 Launch a real-time terminal dashboard showing task progress.
+.TP
+.B flow
+Display a dependency tree visualization showing task relationships from goal to leaf tasks.
 .SH OPTIONS
 .SS "Run Options"
 .TP
@@ -98,6 +104,23 @@ Refresh interval for the dashboard. Default: 2 seconds.
 .TP
 .BR \-p ", " \-\-prd " " \fIFILE\fR
 PRD filename to watch. Default: prd.json.
+.SS "Flow Options"
+.TP
+.BR \-r ", " \-\-refresh " " \fISECONDS\fR
+Refresh interval for the flow display. Default: 2 seconds.
+.TP
+.BR \-p ", " \-\-prd " " \fIFILE\fR
+PRD filename to display. Default: prd.json.
+.SS "Claude Argument Passthrough"
+Arguments after \fB\-\-\fR are passed directly to Claude Code. This follows the POSIX convention for argument separation.
+.PP
+Example:
+.nf
+ralph \-\- \-\-chrome
+ralph init "Build web scraper" \-\- \-\-chrome
+.fi
+.PP
+This is useful for enabling Claude features like browser access (\-\-chrome) or debug mode.
 .SS "General Options"
 .TP
 .BR \-h ", " \-\-help
@@ -149,6 +172,26 @@ _
 \[u25CC]	Blocked	Waiting on dependencies
 \[u21B3]	Expanding	Task expanded into sub-PRD
 .TE
+.SH DEPENDENCY FLOW
+The flow command displays a real-time dependency tree showing task relationships:
+.IP \(bu 2
+Goal at the top
+.IP \(bu 2
+Root tasks (no dependencies) directly under goal
+.IP \(bu 2
+Child tasks indented under their dependencies
+.IP \(bu 2
+Status icons matching watch command
+.PP
+Example output:
+.nf
+  GOAL: Build a REST API
+
+  [✓] T-100  Setup project structure
+   ├── [✓] T-200  Add user model
+   │    └── [◉] T-210  User authentication
+   └── [○] T-300  Add API endpoints
+.fi
 .SH PRD FILE FORMAT
 The PRD file is a JSON document with a \fBtasks\fR array:
 .PP
@@ -213,6 +256,9 @@ Override maximum sub-PRD nesting depth.
 .B RALPH_SUDO_PASS
 Sudo password for privileged commands (with --sudo-pass).
 .TP
+.B RALPH_CLAUDE_ARGS
+Extra arguments to pass to Claude Code (same as \fB\-\-\fR on command line).
+.TP
 .B NO_COLOR
 Disable colored output when set.
 .SH FILES
@@ -264,6 +310,26 @@ Disable automatic expansion:
 .PP
 .nf
 ralph --no-expand
+.fi
+.PP
+View dependency flow:
+.PP
+.nf
+ralph flow
+.fi
+.PP
+Pass arguments to Claude (enable Chrome):
+.PP
+.nf
+ralph -- --chrome
+ralph init "Build web scraper" -- --chrome
+.fi
+.PP
+Use environment variable for Claude args:
+.PP
+.nf
+export RALPH_CLAUDE_ARGS="--chrome"
+ralph
 .fi
 .SH EXIT STATUS
 .TP
