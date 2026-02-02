@@ -92,6 +92,169 @@ get_prompts_dir() {
     echo "${RALPH_PROMPTS_DIR:-${RALPH_ROOT}/prompts}"
 }
 
+# ==========================================
+# Pre-Iteration Task Optimizer
+# ==========================================
+
+# Discover available agents by scanning Claude plugin directories
+discover_agents_catalog() {
+    local catalog=""
+    local claude_dir="${HOME}/.claude"
+
+    # Scan for agent definition files in plugin directories
+    if [[ -d "$claude_dir" ]]; then
+        while IFS= read -r agent_file; do
+            local name="" description="" in_frontmatter=false
+            while IFS= read -r line; do
+                if [[ "$line" == "---" ]]; then
+                    if [[ "$in_frontmatter" == true ]]; then
+                        break
+                    fi
+                    in_frontmatter=true
+                    continue
+                fi
+                if [[ "$in_frontmatter" == true ]]; then
+                    if [[ "$line" =~ ^name:\ *(.*) ]]; then
+                        name="${BASH_REMATCH[1]}"
+                        # Strip quotes
+                        name="${name%\"}"
+                        name="${name#\"}"
+                        name="${name%\'}"
+                        name="${name#\'}"
+                    elif [[ "$line" =~ ^description:\ *(.*) ]]; then
+                        description="${BASH_REMATCH[1]}"
+                        description="${description%\"}"
+                        description="${description#\"}"
+                        description="${description%\'}"
+                        description="${description#\'}"
+                    fi
+                fi
+            done < "$agent_file"
+            if [[ -n "$name" ]] && [[ -n "$description" ]]; then
+                # Truncate description to first sentence for brevity
+                local short_desc="${description%%.*}."
+                if [[ ${#short_desc} -gt 120 ]]; then
+                    short_desc="${short_desc:0:117}..."
+                fi
+                catalog+="${name}: ${short_desc}"$'\n'
+            fi
+        done < <(find "$claude_dir" -path "*/agents/*.md" -type f 2>/dev/null | sort)
+    fi
+
+    # Fallback to static catalog if discovery found nothing
+    if [[ -z "$catalog" ]]; then
+        cat "${RALPH_ROOT}/config/agents-catalog.md" 2>/dev/null || echo "(none)"
+    else
+        echo "$catalog"
+    fi
+}
+
+# Discover available skills by scanning Claude plugin directories
+discover_skills_catalog() {
+    local catalog=""
+    local claude_dir="${HOME}/.claude"
+
+    # Scan for skill definition files in plugin directories
+    if [[ -d "$claude_dir" ]]; then
+        while IFS= read -r skill_file; do
+            local name="" description="" in_frontmatter=false
+            while IFS= read -r line; do
+                if [[ "$line" == "---" ]]; then
+                    if [[ "$in_frontmatter" == true ]]; then
+                        break
+                    fi
+                    in_frontmatter=true
+                    continue
+                fi
+                if [[ "$in_frontmatter" == true ]]; then
+                    if [[ "$line" =~ ^name:\ *(.*) ]]; then
+                        name="${BASH_REMATCH[1]}"
+                        name="${name%\"}"
+                        name="${name#\"}"
+                        name="${name%\'}"
+                        name="${name#\'}"
+                    elif [[ "$line" =~ ^description:\ *(.*) ]]; then
+                        description="${BASH_REMATCH[1]}"
+                        description="${description%\"}"
+                        description="${description#\"}"
+                        description="${description%\'}"
+                        description="${description#\'}"
+                    fi
+                fi
+            done < "$skill_file"
+            if [[ -n "$name" ]] && [[ -n "$description" ]]; then
+                local short_desc="${description%%.*}."
+                if [[ ${#short_desc} -gt 120 ]]; then
+                    short_desc="${short_desc:0:117}..."
+                fi
+                catalog+="${name}: ${short_desc}"$'\n'
+            fi
+        done < <(find "$claude_dir" -path "*/skills/*.md" -type f -o -path "*/commands/*.md" -type f 2>/dev/null | sort)
+    fi
+
+    # Fallback to static catalog if discovery found nothing
+    if [[ -z "$catalog" ]]; then
+        cat "${RALPH_ROOT}/config/skills-catalog.md" 2>/dev/null || echo "(none)"
+    else
+        echo "$catalog"
+    fi
+}
+
+# Generate a task briefing using a fast haiku pre-call
+generate_task_briefing() {
+    local task_json="$1"
+    local active_prd="$2"
+
+    # Skip if disabled
+    if [[ "${RALPH_NO_OPTIMIZER:-false}" == "true" ]]; then
+        echo ""
+        return 0
+    fi
+
+    # Get project context
+    local project_name
+    project_name=$(jq -r '.name // "Unknown"' "$active_prd" 2>/dev/null)
+
+    local project_context
+    project_context="Project: $project_name"$'\n'"Directory: $PROJECT_DIR"
+    local dir_listing
+    dir_listing=$(find "$PROJECT_DIR" -maxdepth 2 -type d -not -path '*/\.*' -not -path '*/node_modules/*' -not -path '*/target/*' 2>/dev/null | head -10)
+    if [[ -n "$dir_listing" ]]; then
+        project_context+=$'\n'"$dir_listing"
+    fi
+
+    # Discover catalogs at runtime
+    local agents_catalog skills_catalog
+    agents_catalog=$(discover_agents_catalog)
+    skills_catalog=$(discover_skills_catalog)
+
+    # Build optimizer prompt
+    local optimizer_prompt
+    optimizer_prompt=$(load_prompt "optimizer" \
+        "TASK_JSON=$task_json" \
+        "AVAILABLE_AGENTS=$agents_catalog" \
+        "AVAILABLE_SKILLS=$skills_catalog" \
+        "PROJECT_CONTEXT=$project_context")
+
+    if [[ -z "$optimizer_prompt" ]]; then
+        warn "Optimizer: failed to load prompt template"
+        echo ""
+        return 0
+    fi
+
+    # Fast haiku call (no tools, short timeout)
+    local briefing
+    briefing=$(echo "$optimizer_prompt" | timeout 30 claude --print --model haiku 2>/dev/null || echo "")
+
+    if [[ -n "$briefing" ]]; then
+        info "Task briefing generated"
+        echo "$briefing"
+    else
+        warn "Optimizer: no briefing generated (continuing without)"
+        echo ""
+    fi
+}
+
 # Get completed tasks from git history
 get_completed_tasks() {
     git log --oneline --grep="Complete T-" --format="%s" 2>/dev/null | \
@@ -109,15 +272,13 @@ check_all_tasks_complete() {
 
 # Show progress
 show_progress() {
+    local active_prd="${1:-$PRD_FILE}"
     local completed_list completed total pct
-    completed_list=$(get_completed_tasks)
-    completed=0
 
-    if [[ -n "$completed_list" ]]; then
-        completed=$(echo "$completed_list" | wc -l)
-    fi
-
-    total=$(jq '.tasks | length' "$PRD_FILE" 2>/dev/null || echo 0)
+    # Count from PRD file (source of truth), not git history
+    total=$(jq '.tasks | length' "$active_prd" 2>/dev/null || echo 0)
+    completed=$(jq '[.tasks[] | select(.pass == true)] | length' "$active_prd" 2>/dev/null || echo 0)
+    completed_list=$(jq -r '[.tasks[] | select(.pass == true) | .id] | join(" ")' "$active_prd" 2>/dev/null || echo "")
     pct=0
 
     if [[ "$total" -gt 0 ]] && [[ "$completed" -gt 0 ]]; then
@@ -128,7 +289,7 @@ show_progress() {
     echo -e "${GREEN}Progress: $completed/$total tasks ($pct%)${NC}"
 
     if [[ -n "$completed_list" ]]; then
-        echo -e "${BLUE}Completed:${NC} $(echo "$completed_list" | tr '\n' ' ')"
+        echo -e "${BLUE}Completed:${NC} $completed_list"
     else
         echo -e "${BLUE}Completed:${NC} (none yet)"
     fi
@@ -184,9 +345,10 @@ EOF
 build_prompt() {
     local iteration="$1"
     local active_prd="${2:-$PRD_FILE}"
+    local task_briefing="${3:-}"
 
     local completed_tasks
-    completed_tasks=$(get_completed_tasks | tr '\n' ',' | sed 's/,$//')
+    completed_tasks=$(jq -r '[.tasks[] | select(.pass == true) | .id] | join(",")' "$active_prd" 2>/dev/null || echo "")
 
     local git_log
     git_log=$(git log --oneline -10 2>/dev/null || echo "No commits yet")
@@ -238,24 +400,49 @@ When this sub-PRD is complete (all tasks pass), the parent task $parent_task_id 
         "AGENTS_FILES=$agents_files" \
         "DIR_STRUCTURE=$dir_structure" \
         "SUDO_INSTRUCTIONS=$sudo_instructions" \
-        "SUB_PRD_CONTEXT=$sub_prd_context"
+        "SUB_PRD_CONTEXT=$sub_prd_context" \
+        "OPTIMIZER_RECOMMENDATIONS=$task_briefing"
 }
 
-# Activity monitor (background process)
+# Activity monitor with debouncing timeout (background process)
+# Writes to a sentinel file when activity is detected so the watchdog can reset
 monitor_activity() {
+    local sentinel="$OUTPUT_DIR/.activity_sentinel"
+    local output_file="${1:-}"
     local start_time last_file_state current_time elapsed current_file_state
+    local last_output_size=0
     start_time=$(date +%s)
     last_file_state=$(get_file_state)
 
     while true; do
-        sleep 30
+        sleep 10
         current_time=$(date +%s)
         elapsed=$((current_time - start_time))
         current_file_state=$(get_file_state)
+        local activity=false
 
+        # Check for project file changes
         if [[ "$current_file_state" != "$last_file_state" ]]; then
             echo -e "${MAGENTA}  [${elapsed}s] Activity: $current_file_state${NC}"
             last_file_state="$current_file_state"
+            activity=true
+        fi
+
+        # Check for output file growth (Claude is producing response)
+        if [[ -n "$output_file" ]] && [[ -f "$output_file" ]]; then
+            local current_output_size
+            current_output_size=$(wc -c < "$output_file" 2>/dev/null || echo 0)
+            if [[ "$current_output_size" -gt "$last_output_size" ]]; then
+                if [[ "$activity" == false ]]; then
+                    echo -e "${MAGENTA}  [${elapsed}s] Claude writing output...${NC}"
+                fi
+                last_output_size=$current_output_size
+                activity=true
+            fi
+        fi
+
+        if [[ "$activity" == true ]]; then
+            date +%s > "$sentinel"
         else
             echo -e "${BLUE}  [${elapsed}s] Waiting...${NC}"
         fi
@@ -282,18 +469,47 @@ run_claude_iteration() {
     # Cleanup on exit
     trap "kill $monitor_pid 2>/dev/null || true" RETURN
 
-    info "Invoking Claude Code (timeout: ${ITERATION_TIMEOUT}s)..."
+    info "Invoking Claude Code (timeout: ${ITERATION_TIMEOUT}s, resets on activity)..."
     echo -e "${BLUE}Output: $output_file${NC}"
     echo ""
 
-    # Run Claude with timeout (include extra args if set)
-    local exit_code=0
-    timeout --foreground "$ITERATION_TIMEOUT" bash -c '
+    # Sentinel file for activity-based timeout reset
+    local sentinel="$OUTPUT_DIR/.activity_sentinel"
+    rm -f "$sentinel"
+    date +%s > "$sentinel"
+
+    # Run Claude in background
+    local claude_pid
+    bash -c '
         claude --print --dangerously-skip-permissions '"${CLAUDE_EXTRA_ARGS:-}"' < "$1" 2>&1
-    ' -- "$prompt_file" > "$output_file" || exit_code=$?
+    ' -- "$prompt_file" > "$output_file" &
+    claude_pid=$!
+
+    # Debouncing watchdog: kill Claude only after ITERATION_TIMEOUT seconds of inactivity
+    local exit_code=0
+    local timed_out=false
+    while kill -0 "$claude_pid" 2>/dev/null; do
+        sleep 5
+        local now last_activity idle
+        now=$(date +%s)
+        last_activity=$(cat "$sentinel" 2>/dev/null || echo "$now")
+        idle=$((now - last_activity))
+
+        if [[ $idle -ge $ITERATION_TIMEOUT ]]; then
+            timed_out=true
+            kill "$claude_pid" 2>/dev/null || true
+            # Give it a moment to exit gracefully
+            sleep 2
+            kill -9 "$claude_pid" 2>/dev/null || true
+            break
+        fi
+    done
+
+    wait "$claude_pid" 2>/dev/null || exit_code=$?
 
     # Kill monitor
     kill $monitor_pid 2>/dev/null || true
+    rm -f "$sentinel"
 
     # Show output summary
     if [[ -f "$output_file" ]] && [[ -s "$output_file" ]]; then
@@ -308,9 +524,10 @@ run_claude_iteration() {
     fi
 
     # Handle timeout
-    if [[ $exit_code -eq 124 ]]; then
+    if [[ "$timed_out" == true ]]; then
         echo ""
-        warn "TIMEOUT: Claude exceeded ${ITERATION_TIMEOUT}s limit"
+        warn "TIMEOUT: Claude idle for ${ITERATION_TIMEOUT}s (no file activity)"
+        exit_code=124
     fi
 
     return $exit_code
@@ -798,7 +1015,7 @@ run_loop() {
             echo -e "${YELLOW}  Stack depth: $depth${NC}"
         fi
 
-        show_progress
+        show_progress "$active_prd"
 
         # Check if active PRD is complete
         if check_prd_complete "$active_prd"; then
@@ -846,6 +1063,15 @@ run_loop() {
             fi
         fi
 
+        # Generate task briefing for this iteration (pre-flight optimizer)
+        local task_briefing=""
+        if [[ -n "$next_task" ]]; then
+            local briefing_task_id
+            briefing_task_id=$(echo "$next_task" | jq -r '.id')
+            info "Generating task briefing for $briefing_task_id..."
+            task_briefing=$(generate_task_briefing "$next_task" "$active_prd")
+        fi
+
         # Capture state before running Claude
         local commit_before file_state_before
         commit_before=$(git rev-parse HEAD 2>/dev/null || echo "none")
@@ -853,7 +1079,7 @@ run_loop() {
 
         # Build and run (use active PRD for prompt)
         local prompt output_file
-        prompt=$(build_prompt "$iteration" "$active_prd")
+        prompt=$(build_prompt "$iteration" "$active_prd" "$task_briefing")
         output_file="$OUTPUT_DIR/output-$iteration.txt"
 
         local claude_exit=0
@@ -945,7 +1171,7 @@ run_loop() {
 
     echo ""
     warn "Max iterations ($MAX_ITERATIONS) reached."
-    show_progress
+    show_progress "$active_prd"
     exit 1
 }
 
@@ -1009,6 +1235,159 @@ generate_prd() {
     echo "$content"
 }
 
+# ==========================================
+# PRD Extension Functions
+# ==========================================
+
+# Generate extension tasks for a completed project
+# Usage: extend_prd "new goal" "/path/to/prd.json"
+extend_prd() {
+    local new_goal="$1"
+    local prd_file="$2"
+    local prompt_file="/tmp/ralph-extend-prompt.md"
+    local output_file="/tmp/ralph-extend-output.txt"
+
+    # Validate PRD exists
+    if [[ ! -f "$prd_file" ]]; then
+        error "PRD file not found: $prd_file"
+        return 1
+    fi
+
+    # Extract project context from existing PRD
+    local project_name
+    project_name=$(jq -r '.name // "Unnamed Project"' "$prd_file")
+
+    # Get completed tasks summary (id, name, guarantees)
+    local completed_tasks_summary
+    completed_tasks_summary=$(jq -r '
+        [.tasks[] | select(.pass == true)] |
+        map("- **\(.id)**: \(.name)\n  Guarantees: \(.guarantees // [] | join(", "))") |
+        join("\n\n")
+    ' "$prd_file")
+
+    if [[ -z "$completed_tasks_summary" ]] || [[ "$completed_tasks_summary" == "" ]]; then
+        error "No completed tasks found. Use 'ralph' to execute existing tasks first."
+        return 1
+    fi
+
+    # Get existing guarantees (flattened and unique)
+    local existing_guarantees
+    existing_guarantees=$(jq -r '
+        [.tasks[] | select(.pass == true) | .guarantees // []] |
+        flatten | unique |
+        map("- \(.)") |
+        join("\n")
+    ' "$prd_file")
+
+    # Calculate starting task ID (next hundred boundary)
+    local max_id starting_id
+    max_id=$(jq '
+        [.tasks[].id | capture("T-(?<n>[0-9]+)").n | tonumber] | max // 0
+    ' "$prd_file")
+    starting_id=$(( ((max_id / 100) + 1) * 100 ))
+
+    # Get project structure
+    local project_structure
+    project_structure=$(find "$(dirname "$prd_file")" -type f \
+        -not -path '*/.git/*' \
+        -not -path '*/node_modules/*' \
+        -not -path '*/target/*' \
+        -not -path '*/__pycache__/*' \
+        -not -name '*.pyc' \
+        -not -name 'prd*.json' \
+        2>/dev/null | head -30 | sort)
+
+    # Get git history
+    local git_history
+    git_history=$(cd "$(dirname "$prd_file")" && git log --oneline -10 2>/dev/null || echo "No git history")
+
+    # Create the prompt using external template
+    load_prompt "extend-prd" \
+        "NEW_GOAL=$new_goal" \
+        "PROJECT_NAME=$project_name" \
+        "COMPLETED_TASKS_SUMMARY=$completed_tasks_summary" \
+        "EXISTING_GUARANTEES=$existing_guarantees" \
+        "STARTING_ID=T-$starting_id" \
+        "PROJECT_STRUCTURE=$project_structure" \
+        "GIT_HISTORY=$git_history" > "$prompt_file"
+
+    # Call Claude with no tools (forces JSON output)
+    info "Calling Claude to generate extension tasks..." >&2
+
+    local exit_code=0
+    timeout 300 claude --print --tools "" ${CLAUDE_EXTRA_ARGS:-} < "$prompt_file" > "$output_file" 2>&1 || exit_code=$?
+
+    if [[ $exit_code -eq 124 ]]; then
+        error "Timeout generating extension tasks"
+        return 1
+    fi
+
+    # Extract JSON from output (same extraction logic as generate_prd)
+    local content
+    content=$(cat "$output_file")
+
+    if [[ "$content" == *"{"* ]]; then
+        content=$(echo "$content" | sed -n '/^{/,/^}/p' | head -1)
+
+        if [[ -z "$content" ]] || ! echo "$content" | jq empty 2>/dev/null; then
+            content=$(cat "$output_file" | grep -Pzo '(?s)\{.*\}' | tr '\0' '\n' | head -1)
+        fi
+
+        if [[ -z "$content" ]] || ! echo "$content" | jq empty 2>/dev/null; then
+            content=$(cat "$output_file" | sed -n '/```json/,/```/p' | sed '1d;$d')
+        fi
+
+        if [[ -z "$content" ]] || ! echo "$content" | jq empty 2>/dev/null; then
+            content=$(cat "$output_file" | tr '\n' ' ' | grep -oP '\{.*\}')
+        fi
+    fi
+
+    # Output the content
+    echo "$content"
+}
+
+# Merge extension tasks into existing PRD
+# Usage: merge_extension "/path/to/prd.json" "extension_json_string"
+merge_extension() {
+    local prd_file="$1"
+    local extension_json="$2"
+
+    # Validate extension JSON
+    if ! echo "$extension_json" | jq empty 2>/dev/null; then
+        error "Invalid extension JSON"
+        return 1
+    fi
+
+    # Extract new tasks array
+    local new_tasks
+    new_tasks=$(echo "$extension_json" | jq '.tasks')
+
+    if [[ -z "$new_tasks" ]] || [[ "$new_tasks" == "null" ]]; then
+        error "No tasks found in extension JSON"
+        return 1
+    fi
+
+    local new_task_count
+    new_task_count=$(echo "$new_tasks" | jq 'length')
+
+    # Get the first new task ID for recommendedNextStepId
+    local first_new_id
+    first_new_id=$(echo "$new_tasks" | jq -r '.[0].id // empty')
+
+    # Merge: append new tasks and update ralph metadata
+    local tmp_file
+    tmp_file=$(mktemp)
+
+    jq --argjson new "$new_tasks" \
+       --arg nextId "$first_new_id" '
+        .tasks = .tasks + $new |
+        .ralph.recommendedNextStepId = $nextId |
+        .ralph.extendedAt = (now | todate)
+    ' "$prd_file" > "$tmp_file" && mv "$tmp_file" "$prd_file"
+
+    echo "$new_task_count"
+}
+
 # Export functions
 export -f setup_colors info success warn error banner
 export -f load_prompt get_prompts_dir
@@ -1016,8 +1395,12 @@ export -f get_completed_tasks check_all_tasks_complete show_progress
 export -f get_file_state build_sudo_instructions build_prompt monitor_activity
 export -f run_claude_iteration check_progress verify_with_claude
 export -f show_completion run_loop generate_prd
+export -f extend_prd merge_extension
 
 # Sub-PRD stack management exports
 export -f get_main_prd_file get_active_prd_file should_expand_task
 export -f get_stack_depth push_prd_stack pop_prd_stack
 export -f generate_sub_prd check_prd_complete get_next_task show_stack_status
+
+# Optimizer exports
+export -f discover_agents_catalog discover_skills_catalog generate_task_briefing
