@@ -411,13 +411,16 @@ monitor_activity() {
     local output_file="${1:-}"
     local start_time last_file_state current_time elapsed current_file_state
     local last_output_size=0
+    local last_activity_time
     start_time=$(date +%s)
+    last_activity_time=$start_time
     last_file_state=$(get_file_state)
 
     while true; do
         sleep 10
         current_time=$(date +%s)
         elapsed=$((current_time - start_time))
+        local idle=$((current_time - last_activity_time))
         current_file_state=$(get_file_state)
         local activity=false
 
@@ -442,9 +445,10 @@ monitor_activity() {
         fi
 
         if [[ "$activity" == true ]]; then
+            last_activity_time=$current_time
             date +%s > "$sentinel"
         else
-            echo -e "${BLUE}  [${elapsed}s] Waiting...${NC}"
+            echo -e "${BLUE}  [${elapsed}s idle=${idle}s/${ITERATION_TIMEOUT}s] Waiting...${NC}"
         fi
     done
 }
