@@ -482,9 +482,9 @@ run_claude_iteration() {
     rm -f "$sentinel"
     date +%s > "$sentinel"
 
-    # Run Claude in background
+    # Run Claude in a new process group so we can kill the entire tree
     local claude_pid
-    bash -c '
+    setsid bash -c '
         claude --print --dangerously-skip-permissions '"${CLAUDE_EXTRA_ARGS:-}"' < "$1" 2>&1
     ' -- "$prompt_file" > "$output_file" &
     claude_pid=$!
@@ -501,10 +501,11 @@ run_claude_iteration() {
 
         if [[ $idle -ge $ITERATION_TIMEOUT ]]; then
             timed_out=true
-            kill "$claude_pid" 2>/dev/null || true
-            # Give it a moment to exit gracefully
+            warn "TIMEOUT: idle ${idle}s >= ${ITERATION_TIMEOUT}s, killing process group..."
+            # Kill entire process group (setsid made claude_pid the group leader)
+            kill -- -"$claude_pid" 2>/dev/null || true
             sleep 2
-            kill -9 "$claude_pid" 2>/dev/null || true
+            kill -9 -- -"$claude_pid" 2>/dev/null || true
             break
         fi
     done
