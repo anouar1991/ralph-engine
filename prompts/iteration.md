@@ -60,6 +60,12 @@ git commit -m "Complete T-XXX: Task Name
 - Guarantees verified: [list what was validated]"
 ```
 
+**After a successful commit, signal completion:**
+```bash
+touch .task-finished
+```
+This tells Ralph you're done so it can start the next iteration immediately. Only run this AFTER your commit succeeds, never before.
+
 ## The Relay Race: Baton Passing
 
 **You are a runner in a relay race. Each task passes a working baton to the next.**
@@ -146,6 +152,11 @@ When ALL tasks have `pass: true`, output exactly:
 
 ```
 <promise>PROJECT COMPLETE</promise>
+```
+
+Then signal completion:
+```bash
+touch .task-finished
 ```
 
 ## Current Directory Structure

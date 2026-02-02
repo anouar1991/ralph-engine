@@ -463,6 +463,10 @@ run_claude_iteration() {
     # Save prompt for debugging
     echo "$prompt" > "$prompt_file"
 
+    # Clean stale sentinel files and create .task-started
+    rm -f "$PROJECT_DIR/.task-started" "$PROJECT_DIR/.task-finished"
+    date -Iseconds > "$PROJECT_DIR/.task-started"
+
     # Clear output file
     : > "$output_file"
 
@@ -492,8 +496,23 @@ run_claude_iteration() {
     # Debouncing watchdog: kill Claude only after ITERATION_TIMEOUT seconds of inactivity
     local exit_code=0
     local timed_out=false
+    local task_finished=false
     while kill -0 "$claude_pid" 2>/dev/null; do
         sleep 5
+
+        # Check for task completion signal (.task-finished created by Claude)
+        if [[ -f "$PROJECT_DIR/.task-finished" ]]; then
+            task_finished=true
+            success "Task completion signal detected, shutting down Claude..."
+            sleep 2
+            if kill -0 "$claude_pid" 2>/dev/null; then
+                kill -- -"$claude_pid" 2>/dev/null || true
+                sleep 1
+                kill -9 -- -"$claude_pid" 2>/dev/null || true
+            fi
+            break
+        fi
+
         local now last_activity idle
         now=$(date +%s)
         last_activity=$(cat "$sentinel" 2>/dev/null || echo "$now")
@@ -515,6 +534,7 @@ run_claude_iteration() {
     # Kill monitor
     kill $monitor_pid 2>/dev/null || true
     rm -f "$sentinel"
+    rm -f "$PROJECT_DIR/.task-started" "$PROJECT_DIR/.task-finished"
 
     # Show output summary
     if [[ -f "$output_file" ]] && [[ -s "$output_file" ]]; then
@@ -526,6 +546,11 @@ run_claude_iteration() {
         echo -e "${BLUE}--- End preview ---${NC}"
     else
         warn "No text response captured (tools may have executed)"
+    fi
+
+    # Handle task-finished signal (normalize exit code — kill produces non-zero)
+    if [[ "$task_finished" == true ]]; then
+        exit_code=0
     fi
 
     # Handle timeout
