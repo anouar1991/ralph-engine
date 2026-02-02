@@ -11,6 +11,9 @@ ralph \- autonomous task executor for Claude Code
 .B ralph init
 [\fIOPTIONS\fR] \fIGOAL\fR [\fB\-\-\fR \fICLAUDE_ARGS\fR]
 .br
+.B ralph extend
+[\fIOPTIONS\fR] \fIGOAL\fR [\fB\-\-\fR \fICLAUDE_ARGS\fR]
+.br
 .B ralph status
 [\fIPROJECT_DIR\fR]
 .br
@@ -34,6 +37,9 @@ Ralph operates in an iterative loop: read PRD, select task, execute with Claude,
 .TP
 .B init
 Generate a prd.json file from a natural language goal description.
+.TP
+.B extend
+Add new tasks to an already-completed project. Enables iterative development where you can add features or enhancements after the initial implementation is complete.
 .TP
 .B status
 Display current project progress including completed and pending tasks.
@@ -70,6 +76,9 @@ Skip the verification step after each iteration.
 .B \-\-no\-expand
 Disable automatic task expansion into sub-PRDs.
 .TP
+.B \-\-no\-optimizer
+Disable the pre-iteration task optimizer. By default, Ralph makes a fast Haiku call before each iteration to generate a task briefing with recommended agents, skills, tools, and approach notes. This flag skips that call.
+.TP
 .BR \-\-expansion\-threshold " " \fIN\fR
 Complexity threshold for automatic expansion. Tasks with complexity >= N and >= 5 actions will be expanded. Default: 4.
 .TP
@@ -97,6 +106,19 @@ Target number of tasks to generate. Default: automatic based on goal complexity.
 .TP
 .B \-\-dry\-run
 Preview the generated PRD without writing to disk.
+.SS "Extend Options"
+.TP
+.BR \-f ", " \-\-file " " \fIFILE\fR
+Read goal description from a file instead of command line argument.
+.TP
+.BR \-d ", " \-\-dir " " \fIDIR\fR
+Project directory containing the PRD. Default: current directory.
+.TP
+.BR \-p ", " \-\-prd " " \fIFILE\fR
+PRD filename to extend. Default: prd.json.
+.TP
+.B \-\-dry\-run
+Preview the extension tasks without modifying the PRD.
 .SS "Watch Options"
 .TP
 .BR \-r ", " \-\-refresh " " \fISECONDS\fR
@@ -247,6 +269,9 @@ Override default output directory for logs.
 .B RALPH_NO_EXPAND
 Disable automatic task expansion (true/false).
 .TP
+.B RALPH_NO_OPTIMIZER
+Disable the pre-iteration task optimizer (true/false).
+.TP
 .B RALPH_EXPANSION_THRESHOLD
 Override complexity threshold for expansion.
 .TP
@@ -281,6 +306,13 @@ Generate a PRD from a goal:
 ralph init "Build a REST API for user management"
 .fi
 .PP
+Extend a completed project with new features:
+.PP
+.nf
+ralph extend "Add CSV export functionality"
+ralph extend -f new-features.md --dry-run
+.fi
+.PP
 Run Ralph on current directory:
 .PP
 .nf
@@ -310,6 +342,12 @@ Disable automatic expansion:
 .PP
 .nf
 ralph --no-expand
+.fi
+.PP
+Disable pre-iteration optimizer:
+.PP
+.nf
+ralph --no-optimizer
 .fi
 .PP
 View dependency flow:

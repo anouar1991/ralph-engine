@@ -53,6 +53,7 @@ ralph - Autonomous task executor for Claude Code
 USAGE:
     ralph [OPTIONS] [PROJECT_DIR]        Run the task loop
     ralph init [OPTIONS] <GOAL>          Generate prd.json from a goal
+    ralph extend [OPTIONS] <GOAL>        Add tasks to completed project
     ralph status [PROJECT_DIR]           Show project status
     ralph stack [PROJECT_DIR]            Show PRD stack status
     ralph watch [PROJECT_DIR]            Real-time task visualization
@@ -61,6 +62,7 @@ USAGE:
 COMMANDS:
     run (default)    Execute the Ralph loop on a project
     init             Generate a prd.json from a goal description
+    extend           Add new tasks to a completed project
     status           Show current project progress
     stack            Show PRD expansion stack status
     watch            Live dashboard showing task progress
@@ -73,6 +75,9 @@ QUICK START:
     ralph flow       # View task dependency tree
     ralph watch &    # Start live dashboard in background
     ralph            # Run the task loop
+
+EXTENDING PROJECTS:
+    ralph extend "Add CSV export feature"  # After project is complete
 
 For more information, see: https://github.com/anouar1991/ralph-engine
 
@@ -98,6 +103,7 @@ OPTIONS:
     -q, --quiet                 Minimal output
         --no-verify             Skip verification step after each iteration
         --no-expand             Disable automatic task expansion into sub-PRDs
+        --no-optimizer          Disable pre-iteration task optimizer (haiku briefing)
         --expansion-threshold N Complexity threshold for auto-expansion (default: 4)
         --max-stack-depth N     Maximum nested sub-PRD depth (default: 3)
         --sudo-pass [VAR]       Enable sudo password piping from env var (default: RALPH_SUDO_PASS)
@@ -110,6 +116,7 @@ ENVIRONMENT VARIABLES:
     RALPH_OUTPUT_DIR          Override default output directory
     RALPH_SUDO_PASS           Sudo password for privileged commands (with --sudo-pass)
     RALPH_NO_EXPAND           Disable automatic expansion (true/false)
+    RALPH_NO_OPTIMIZER        Disable pre-iteration optimizer (true/false)
     RALPH_EXPANSION_THRESHOLD Override expansion threshold
     RALPH_MAX_STACK_DEPTH     Override max stack depth
     RALPH_CLAUDE_ARGS         Extra arguments to pass to claude command
@@ -121,6 +128,7 @@ EXAMPLES:
     ralph -n 100 -t 1800            # 100 iterations, 30min timeout each
     ralph --dry-run                 # Preview without executing
     ralph --no-expand               # Disable automatic task expansion
+    ralph --no-optimizer            # Disable pre-iteration task briefing
     ralph --expansion-threshold 5   # Only expand tasks with complexity >= 5
     ralph --sudo-pass               # Enable sudo with RALPH_SUDO_PASS env var
     ralph -- --allowedTools Bash    # Pass --allowedTools to claude
@@ -303,6 +311,49 @@ EXAMPLES:
 EOF
 }
 
+usage_extend() {
+    cat <<EOF
+ralph extend - Add new tasks to a completed project
+
+USAGE:
+    ralph extend [OPTIONS] <GOAL> [-- CLAUDE_ARGS...]
+    ralph extend [OPTIONS] -f <FILE> [-- CLAUDE_ARGS...]
+
+ARGUMENTS:
+    GOAL         Goal description for new features/changes (quote multi-word goals)
+    CLAUDE_ARGS  Extra arguments passed directly to claude (after --)
+
+OPTIONS:
+    -f, --file FILE       Read goal from file instead of argument
+    -d, --dir DIR         Project directory (default: current directory)
+    -p, --prd FILE        PRD file name (default: $DEFAULT_PRD_FILE)
+        --dry-run         Show generated tasks without writing
+    -h, --help            Show this help message
+
+DESCRIPTION:
+    Extends an already-completed project with new tasks. This allows iterative
+    development where you can add features, make changes, or enhance existing
+    work after the initial implementation is complete.
+
+    New task IDs start from the next hundred boundary (e.g., if max task is
+    T-450, new tasks start at T-500) to prevent ID collisions.
+
+    New tasks can depend on completed tasks and leverage existing guarantees.
+
+EXAMPLES:
+    ralph extend "Add CSV export functionality"
+    ralph extend "Add dark mode support" -d ~/my-project
+    ralph extend -f new-features.md --dry-run
+    ralph extend "Add caching layer" -- --chrome
+
+REQUIREMENTS:
+    - PRD file must exist
+    - Project must have at least one completed task
+    - Use 'ralph' to execute existing tasks before extending
+
+EOF
+}
+
 version() {
     echo "ralph $RALPH_VERSION"
 }
@@ -326,6 +377,9 @@ parse_run_args() {
     export RALPH_NO_EXPAND="${RALPH_NO_EXPAND:-false}"
     export RALPH_EXPANSION_THRESHOLD="${RALPH_EXPANSION_THRESHOLD:-4}"
     export RALPH_MAX_STACK_DEPTH="${RALPH_MAX_STACK_DEPTH:-3}"
+
+    # Optimizer configuration
+    export RALPH_NO_OPTIMIZER="${RALPH_NO_OPTIMIZER:-false}"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -355,6 +409,10 @@ parse_run_args() {
                 ;;
             --no-expand)
                 export RALPH_NO_EXPAND=true
+                shift
+                ;;
+            --no-optimizer)
+                export RALPH_NO_OPTIMIZER=true
                 shift
                 ;;
             --expansion-threshold)
@@ -668,6 +726,84 @@ parse_flow_args() {
     PRD_FILE="$PROJECT_DIR/$PRD_FILE"
 }
 
+# Extend command configuration
+EXTEND_GOAL_TEXT=""
+EXTEND_GOAL_FILE=""
+EXTEND_OUTPUT_DIR=""
+
+# Parse extend command arguments
+parse_extend_args() {
+    EXTEND_OUTPUT_DIR="."
+    PRD_FILE="$DEFAULT_PRD_FILE"
+    CLAUDE_EXTRA_ARGS="${RALPH_CLAUDE_ARGS:-}"
+    EXTEND_GOAL_TEXT=""
+    EXTEND_GOAL_FILE=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f|--file)
+                EXTEND_GOAL_FILE="$2"
+                shift 2
+                ;;
+            -d|--dir)
+                EXTEND_OUTPUT_DIR="$2"
+                shift 2
+                ;;
+            -p|--prd)
+                PRD_FILE="$2"
+                shift 2
+                ;;
+            --dry-run)
+                DRY_RUN=true
+                shift
+                ;;
+            -h|--help)
+                usage_extend
+                exit 0
+                ;;
+            --)
+                # Everything after -- is passed to claude
+                shift
+                CLAUDE_EXTRA_ARGS="$*"
+                break
+                ;;
+            -*)
+                error "Unknown option: $1"
+                echo "Use 'ralph extend --help' for usage information."
+                exit 1
+                ;;
+            *)
+                EXTEND_GOAL_TEXT="$1"
+                shift
+                ;;
+        esac
+    done
+
+    # Validate we have a goal
+    if [[ -z "$EXTEND_GOAL_TEXT" ]] && [[ -z "$EXTEND_GOAL_FILE" ]]; then
+        error "No goal specified. Provide a goal as argument or use -f FILE."
+        echo ""
+        usage_extend
+        exit 1
+    fi
+
+    # Read goal from file if specified
+    if [[ -n "$EXTEND_GOAL_FILE" ]]; then
+        if [[ ! -f "$EXTEND_GOAL_FILE" ]]; then
+            error "Goal file not found: $EXTEND_GOAL_FILE"
+            exit 1
+        fi
+        EXTEND_GOAL_TEXT=$(cat "$EXTEND_GOAL_FILE")
+    fi
+
+    # Resolve project directory
+    if [[ ! -d "$EXTEND_OUTPUT_DIR" ]]; then
+        error "Project directory not found: $EXTEND_OUTPUT_DIR"
+        exit 1
+    fi
+    EXTEND_OUTPUT_DIR="$(cd "$EXTEND_OUTPUT_DIR" && pwd)"
+}
+
 # Validate environment for run command
 validate_env() {
     # Check for claude CLI
@@ -750,6 +886,7 @@ show_config() {
     echo "  Timeout:      ${ITERATION_TIMEOUT}s per iteration"
     echo "  Output:       $OUTPUT_DIR"
     echo "  Verify:       $([[ "$NO_VERIFY" == true ]] && echo "disabled" || echo "enabled")"
+    echo "  Optimizer:    $([[ "$RALPH_NO_OPTIMIZER" == true ]] && echo "disabled" || echo "enabled")"
     echo "  Sudo:         $([[ -n "$SUDO_PASS_VAR" ]] && echo "enabled (\$$SUDO_PASS_VAR)" || echo "disabled")"
     echo ""
     info "Expansion Settings:"
@@ -1065,6 +1202,126 @@ cmd_flow() {
     run_flow "$PRD_FILE" "$PROJECT_DIR" "$FLOW_REFRESH_INTERVAL"
 }
 
+# Extend command
+cmd_extend() {
+    parse_extend_args "$@"
+
+    # Export extra claude args for use in extend_prd
+    export CLAUDE_EXTRA_ARGS
+
+    # Check for claude
+    if ! command -v claude &>/dev/null; then
+        error "claude CLI not found in PATH"
+        echo "Install Claude Code: https://claude.ai/code"
+        exit 1
+    fi
+
+    # Check for jq
+    if ! command -v jq &>/dev/null; then
+        error "jq not found in PATH"
+        echo "Install jq: https://stedolan.github.io/jq/download/"
+        exit 1
+    fi
+
+    local prd_path="$EXTEND_OUTPUT_DIR/$PRD_FILE"
+
+    # Check if PRD exists
+    if [[ ! -f "$prd_path" ]]; then
+        error "PRD file not found: $prd_path"
+        echo ""
+        echo "Use 'ralph init' to create a new project first."
+        exit 1
+    fi
+
+    # Validate PRD JSON
+    if ! jq empty "$prd_path" 2>/dev/null; then
+        error "Invalid JSON in PRD file: $prd_path"
+        exit 1
+    fi
+
+    # Check for completed tasks
+    local completed_count
+    completed_count=$(jq '[.tasks[] | select(.pass == true)] | length' "$prd_path")
+
+    if [[ "$completed_count" -eq 0 ]]; then
+        error "No completed tasks found in PRD."
+        echo ""
+        echo "Use 'ralph' to execute existing tasks before extending."
+        exit 1
+    fi
+
+    banner "RALPH ENGINE v$RALPH_VERSION"
+    echo ""
+    info "Extending PRD with new tasks..."
+    echo ""
+    echo -e "${CYAN}New Goal:${NC}"
+    echo "$EXTEND_GOAL_TEXT" | head -20
+    if [[ $(echo "$EXTEND_GOAL_TEXT" | wc -l) -gt 20 ]]; then
+        echo "  ... (truncated)"
+    fi
+    echo ""
+
+    # Show current state
+    local total_tasks
+    total_tasks=$(jq '.tasks | length' "$prd_path")
+    info "Current PRD: $completed_count/$total_tasks tasks complete"
+    echo ""
+
+    # Generate extension
+    local extension_content
+    extension_content=$(extend_prd "$EXTEND_GOAL_TEXT" "$prd_path")
+
+    if [[ -z "$extension_content" ]]; then
+        error "Failed to generate extension tasks"
+        exit 1
+    fi
+
+    # Validate generated JSON
+    if ! echo "$extension_content" | jq empty 2>/dev/null; then
+        error "Generated extension is not valid JSON"
+        echo ""
+        echo "Raw output:"
+        echo "$extension_content" | head -50
+        exit 1
+    fi
+
+    # Extract task count for display
+    local new_task_count
+    new_task_count=$(echo "$extension_content" | jq '.tasks | length')
+
+    # Dry run - just show the extension
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[DRY RUN] Generated extension:"
+        echo ""
+        echo "$extension_content" | jq .
+        echo ""
+        info "Would add $new_task_count new tasks to $prd_path"
+        exit 0
+    fi
+
+    # Merge extension into PRD
+    local merged_count
+    merged_count=$(merge_extension "$prd_path" "$extension_content")
+
+    if [[ -z "$merged_count" ]] || [[ "$merged_count" -eq 0 ]]; then
+        error "Failed to merge extension into PRD"
+        exit 1
+    fi
+
+    local new_total
+    new_total=$(jq '.tasks | length' "$prd_path")
+
+    echo ""
+    success "PRD extended: $prd_path"
+    info "New tasks added: $merged_count"
+    info "Total tasks: $new_total"
+    echo ""
+    echo "Next steps:"
+    echo "  1. Review new tasks: jq '.tasks[-$merged_count:]' $prd_path"
+    echo "  2. Run Ralph:        ralph $EXTEND_OUTPUT_DIR"
+    echo ""
+}
+
 # Main entry point
 main() {
     # Setup colors early (respects NO_COLOR)
@@ -1088,6 +1345,10 @@ main() {
         init)
             shift
             cmd_init "$@"
+            ;;
+        extend)
+            shift
+            cmd_extend "$@"
             ;;
         run)
             shift

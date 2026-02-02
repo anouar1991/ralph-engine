@@ -9,6 +9,7 @@ _ralph() {
     local -a commands
     commands=(
         'init:Generate prd.json from a goal description'
+        'extend:Add new tasks to a completed project'
         'run:Execute the Ralph loop on a project'
         'status:Show current project progress'
         'stack:Show PRD expansion stack status'
@@ -44,6 +45,15 @@ _ralph() {
                         '(-h --help)'{-h,--help}'[Show help]' \
                         '*:goal:'
                     ;;
+                extend)
+                    _arguments \
+                        '(-f --file)'{-f,--file}'[Read goal from file]:file:_files' \
+                        '(-d --dir)'{-d,--dir}'[Project directory]:directory:_files -/' \
+                        '(-p --prd)'{-p,--prd}'[PRD filename]:file:_files -g "*.json"' \
+                        '--dry-run[Preview without writing]' \
+                        '(-h --help)'{-h,--help}'[Show help]' \
+                        '*:goal:'
+                    ;;
                 run)
                     _arguments \
                         '(-n --max-iterations)'{-n,--max-iterations}'[Maximum iterations]:number:(10 25 50 100 200)' \
@@ -53,6 +63,7 @@ _ralph() {
                         '(-q --quiet)'{-q,--quiet}'[Minimal output]' \
                         '--no-verify[Skip verification step]' \
                         '--no-expand[Disable automatic task expansion]' \
+                        '--no-optimizer[Disable pre-iteration task optimizer]' \
                         '--expansion-threshold[Complexity threshold for expansion]:number:(3 4 5)' \
                         '--max-stack-depth[Maximum sub-PRD nesting]:number:(1 2 3 4 5)' \
                         '--sudo-pass[Enable sudo password piping]:envvar:(RALPH_SUDO_PASS SUDO_PASSWORD)' \

@@ -111,6 +111,12 @@ install_ralph() {
     cp -r "$SCRIPT_DIR/prompts" "$INSTALL_DIR/prompts"
     chmod 644 "$INSTALL_DIR/prompts"/*.md
 
+    # Install config (agent/skill catalogs for optimizer fallback)
+    info "Installing config..."
+    rm -rf "$INSTALL_DIR/config"
+    cp -r "$SCRIPT_DIR/config" "$INSTALL_DIR/config"
+    chmod 644 "$INSTALL_DIR/config"/*.md
+
     # Install man page
     if [[ -f "$SCRIPT_DIR/man/man1/ralph.1" ]]; then
         info "Installing man page..."
@@ -175,6 +181,11 @@ uninstall_ralph() {
     if [[ -d "$INSTALL_DIR/prompts" ]]; then
         rm -rf "$INSTALL_DIR/prompts"
         success "Removed prompts"
+    fi
+
+    if [[ -d "$INSTALL_DIR/config" ]]; then
+        rm -rf "$INSTALL_DIR/config"
+        success "Removed config"
     fi
 
     if [[ -f "$MAN_DIR/ralph.1" ]]; then

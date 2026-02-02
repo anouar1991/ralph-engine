@@ -10,13 +10,13 @@ _ralph_completions() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     # Commands
-    commands="init run status stack watch flow"
+    commands="init extend run status stack watch flow"
 
     # Determine if we're completing a command or option
     local cmd=""
     for ((i=1; i < COMP_CWORD; i++)); do
         case "${COMP_WORDS[i]}" in
-            init|run|status|stack|watch|flow)
+            init|extend|run|status|stack|watch|flow)
                 cmd="${COMP_WORDS[i]}"
                 break
                 ;;
@@ -46,6 +46,26 @@ _ralph_completions() {
             esac
             if [[ "${cur}" == -* ]]; then
                 COMPREPLY=($(compgen -W "-f --file -d --dir -p --prd --complexity --dry-run -h --help" -- "${cur}"))
+            fi
+            return 0
+            ;;
+        extend)
+            case "${prev}" in
+                -f|--file)
+                    COMPREPLY=($(compgen -f -- "${cur}"))
+                    return 0
+                    ;;
+                -d|--dir)
+                    COMPREPLY=($(compgen -d -- "${cur}"))
+                    return 0
+                    ;;
+                -p|--prd)
+                    COMPREPLY=($(compgen -f -X '!*.json' -- "${cur}"))
+                    return 0
+                    ;;
+            esac
+            if [[ "${cur}" == -* ]]; then
+                COMPREPLY=($(compgen -W "-f --file -d --dir -p --prd --dry-run -h --help" -- "${cur}"))
             fi
             return 0
             ;;
@@ -82,7 +102,7 @@ _ralph_completions() {
                     ;;
             esac
             if [[ "${cur}" == -* ]]; then
-                COMPREPLY=($(compgen -W "-n --max-iterations -t --timeout -p --prd -o --output -q --quiet --no-verify --no-expand --expansion-threshold --max-stack-depth --sudo-pass --dry-run -h --help" -- "${cur}"))
+                COMPREPLY=($(compgen -W "-n --max-iterations -t --timeout -p --prd -o --output -q --quiet --no-verify --no-expand --no-optimizer --expansion-threshold --max-stack-depth --sudo-pass --dry-run -h --help" -- "${cur}"))
             else
                 COMPREPLY=($(compgen -d -- "${cur}"))
             fi
