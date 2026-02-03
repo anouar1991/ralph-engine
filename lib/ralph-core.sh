@@ -1117,8 +1117,8 @@ run_loop() {
 
         echo ""
 
-        # Verification step (unless disabled)
-        if [[ "$NO_VERIFY" != true ]]; then
+        # Verification step: skip when task signaled completion, run on timeout
+        if [[ "$NO_VERIFY" != true ]] && [[ "$claude_exit" -eq 124 ]]; then
             verify_with_claude "$iteration" || true
         fi
 
