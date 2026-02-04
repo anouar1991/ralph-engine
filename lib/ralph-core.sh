@@ -497,6 +497,8 @@ run_claude_iteration() {
     local exit_code=0
     local timed_out=false
     local task_finished=false
+    local watchdog_start
+    watchdog_start=$(date +%s)
     while kill -0 "$claude_pid" 2>/dev/null; do
         sleep 5
 
@@ -515,7 +517,12 @@ run_claude_iteration() {
 
         local now last_activity idle
         now=$(date +%s)
-        last_activity=$(cat "$sentinel" 2>/dev/null || echo "$now")
+        if [[ -f "$sentinel" ]]; then
+            last_activity=$(cat "$sentinel")
+        else
+            # Sentinel missing — treat as no activity since start
+            last_activity=${watchdog_start:-$now}
+        fi
         idle=$((now - last_activity))
 
         if [[ $idle -ge $ITERATION_TIMEOUT ]]; then
