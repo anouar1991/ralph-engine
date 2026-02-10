@@ -24,6 +24,7 @@ setup_colors() {
         BOLD='\033[1m'
         NC='\033[0m'
     fi
+    export RED GREEN YELLOW BLUE CYAN MAGENTA BOLD NC
 }
 
 # Logging functions
@@ -299,12 +300,12 @@ show_progress() {
 
 # Get file state for progress detection
 get_file_state() {
-    find . -type f \
+    (find . -type f \
         -not -path '*/\.*' \
         -not -path './node_modules/*' \
         -not -path './target/*' \
         -not -path './.git/*' \
-        -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-
+        -printf '%T@ %p\n' 2>/dev/null || true) | sort -n | tail -1 | cut -d' ' -f2-
 }
 
 # Build sudo instructions if enabled
