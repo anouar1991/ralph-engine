@@ -212,14 +212,41 @@ generate_task_briefing() {
         return 0
     fi
 
-    # Get project context
+    # Get project context with stack discovery signals
     local project_name
     project_name=$(jq -r '.name // "Unknown"' "$active_prd" 2>/dev/null)
 
     local project_context
     project_context="Project: $project_name"$'\n'"Directory: $PROJECT_DIR"
+
+    # Stack markers: project manifest files that reveal the technology stack
+    local stack_markers
+    stack_markers=$(find "$PROJECT_DIR" -maxdepth 1 -type f \( \
+        -name "package.json" -o -name "tsconfig.json" -o -name "pyproject.toml" -o \
+        -name "setup.py" -o -name "setup.cfg" -o -name "Pipfile" -o -name "requirements.txt" -o \
+        -name "Cargo.toml" -o -name "go.mod" -o -name "pom.xml" -o -name "build.gradle" -o \
+        -name "Gemfile" -o -name "Makefile" -o -name "CMakeLists.txt" -o -name "docker-compose.yml" -o \
+        -name "Dockerfile" -o -name ".eslintrc*" -o -name "vite.config.*" -o -name "next.config.*" -o \
+        -name "webpack.config.*" -o -name "tailwind.config.*" -o -name "manage.py" -o \
+        -name "mix.exs" -o -name "pubspec.yaml" -o -name "composer.json" -o \
+        -name "uv.lock" -o -name "poetry.lock" -o -name "bun.lockb" \
+    \) 2>/dev/null | xargs -I{} basename {} | sort)
+    if [[ -n "$stack_markers" ]]; then
+        project_context+=$'\n'"Stack markers: $stack_markers"
+    fi
+
+    # AGENTS.md files: institutional memory from previous iterations
+    local agents_md_files
+    agents_md_files=$(find "$PROJECT_DIR" -name "AGENTS.md" -type f -not -path '*/node_modules/*' -not -path '*/\.*' 2>/dev/null | head -5)
+    if [[ -n "$agents_md_files" ]]; then
+        project_context+=$'\n'"AGENTS.md files (institutional memory): $agents_md_files"
+    else
+        project_context+=$'\n'"AGENTS.md files: none yet"
+    fi
+
+    # Directory structure (top 2 levels, dirs only)
     local dir_listing
-    dir_listing=$(find "$PROJECT_DIR" -maxdepth 2 -type d -not -path '*/\.*' -not -path '*/node_modules/*' -not -path '*/target/*' 2>/dev/null | head -10)
+    dir_listing=$(find "$PROJECT_DIR" -maxdepth 2 -type d -not -path '*/\.*' -not -path '*/node_modules/*' -not -path '*/target/*' -not -path '*/__pycache__/*' -not -path '*/venv/*' -not -path '*/.venv/*' 2>/dev/null | head -15)
     if [[ -n "$dir_listing" ]]; then
         project_context+=$'\n'"$dir_listing"
     fi
@@ -243,9 +270,9 @@ generate_task_briefing() {
         return 0
     fi
 
-    # Fast haiku call (no tools, short timeout)
+    # Opus pre-flight call (no tools, 120s timeout)
     local briefing
-    briefing=$(echo "$optimizer_prompt" | timeout 30 claude --print --model haiku 2>/dev/null || echo "")
+    briefing=$(echo "$optimizer_prompt" | timeout 120 claude --print --dangerously-skip-permissions --model opus 2>/dev/null || echo "")
 
     if [[ -n "$briefing" ]]; then
         info "Task briefing generated"
@@ -346,7 +373,6 @@ EOF
 build_prompt() {
     local iteration="$1"
     local active_prd="${2:-$PRD_FILE}"
-    local task_briefing="${3:-}"
 
     local completed_tasks
     completed_tasks=$(jq -r '[.tasks[] | select(.pass == true) | .id] | join(",")' "$active_prd" 2>/dev/null || echo "")
@@ -401,8 +427,7 @@ When this sub-PRD is complete (all tasks pass), the parent task $parent_task_id 
         "AGENTS_FILES=$agents_files" \
         "DIR_STRUCTURE=$dir_structure" \
         "SUDO_INSTRUCTIONS=$sudo_instructions" \
-        "SUB_PRD_CONTEXT=$sub_prd_context" \
-        "OPTIMIZER_RECOMMENDATIONS=$task_briefing"
+        "SUB_PRD_CONTEXT=$sub_prd_context"
 }
 
 # Activity monitor with debouncing timeout (background process)
@@ -458,6 +483,7 @@ monitor_activity() {
 run_claude_iteration() {
     local iteration="$1"
     local prompt="$2"
+    local briefing_file="${3:-}"
     local output_file="$OUTPUT_DIR/output-$iteration.txt"
     local prompt_file="$OUTPUT_DIR/prompt-$iteration.md"
 
@@ -487,10 +513,16 @@ run_claude_iteration() {
     rm -f "$sentinel"
     date +%s > "$sentinel"
 
+    # Build system prompt extension flag if briefing file exists
+    local system_prompt_flag=""
+    if [[ -n "$briefing_file" ]] && [[ -s "$briefing_file" ]]; then
+        system_prompt_flag="--append-system-prompt-file \"$briefing_file\""
+    fi
+
     # Run Claude in a new process group so we can kill the entire tree
     local claude_pid
     setsid bash -c '
-        claude --print --dangerously-skip-permissions '"${CLAUDE_EXTRA_ARGS:-}"' < "$1" 2>&1
+        claude --print --dangerously-skip-permissions '"${system_prompt_flag}"' '"${CLAUDE_EXTRA_ARGS:-}"' < "$1" 2>&1
     ' -- "$prompt_file" > "$output_file" &
     claude_pid=$!
 
@@ -1102,12 +1134,18 @@ run_loop() {
         fi
 
         # Generate task briefing for this iteration (pre-flight optimizer)
-        local task_briefing=""
+        # Written to file for injection via --append-system-prompt-file
+        local briefing_file="$OUTPUT_DIR/briefing-$iteration.md"
+        : > "$briefing_file"
         if [[ -n "$next_task" ]]; then
             local briefing_task_id
             briefing_task_id=$(echo "$next_task" | jq -r '.id')
             info "Generating task briefing for $briefing_task_id..."
+            local task_briefing
             task_briefing=$(generate_task_briefing "$next_task" "$active_prd")
+            if [[ -n "$task_briefing" ]]; then
+                echo "$task_briefing" > "$briefing_file"
+            fi
         fi
 
         # Capture state before running Claude
@@ -1117,11 +1155,11 @@ run_loop() {
 
         # Build and run (use active PRD for prompt)
         local prompt output_file
-        prompt=$(build_prompt "$iteration" "$active_prd" "$task_briefing")
+        prompt=$(build_prompt "$iteration" "$active_prd")
         output_file="$OUTPUT_DIR/output-$iteration.txt"
 
         local claude_exit=0
-        run_claude_iteration "$iteration" "$prompt" || claude_exit=$?
+        run_claude_iteration "$iteration" "$prompt" "$briefing_file" || claude_exit=$?
 
         echo ""
 

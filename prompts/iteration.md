@@ -14,8 +14,6 @@
 ### Existing AGENTS.md files:
 {{AGENTS_FILES}}
 
-{{OPTIMIZER_RECOMMENDATIONS}}
-
 ## Your Task This Iteration
 
 ### 1. Select a Task
